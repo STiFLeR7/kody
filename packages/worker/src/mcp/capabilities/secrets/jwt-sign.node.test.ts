@@ -60,6 +60,7 @@ function createEcKeyPair(namedCurve: 'prime256v1' | 'secp384r1' | 'secp521r1') {
 
 function stubSecret(value: string | null) {
 	return vi.spyOn(secretService, 'resolveSecret').mockResolvedValue({
+		credentialId: value === null ? null : 'cred-signing-key',
 		found: value !== null,
 		value,
 		scope: value === null ? null : 'user',

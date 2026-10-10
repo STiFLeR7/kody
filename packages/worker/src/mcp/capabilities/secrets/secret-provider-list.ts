@@ -12,7 +12,7 @@ export const secretProviderListCapability = defineDomainCapability(
 		name: 'secretProviderList',
 		orgPermission: 'secret:use',
 		description:
-			'List account-bound external secret providers (provider id, bound package, door-key secret name, non-secret config). Never returns credential values or vault items. Search does not crawl vaults.',
+			'List account-bound external secret providers (credential id for accessGrant, provider id, bound package, door-key secret name, non-secret config). Never returns credential values or vault items. Search does not crawl vaults.',
 		keywords: ['secret', 'provider', '1password', 'binding', 'list'],
 		readOnly: true,
 		idempotent: true,
@@ -21,6 +21,7 @@ export const secretProviderListCapability = defineDomainCapability(
 		outputSchema: z.object({
 			bindings: z.array(
 				z.object({
+					credential_id: z.string(),
 					provider: z.string(),
 					package_id: z.string(),
 					door_secret_name: z.string(),
@@ -36,6 +37,7 @@ export const secretProviderListCapability = defineDomainCapability(
 			})
 			return {
 				bindings: bindings.map((binding) => ({
+					credential_id: binding.credentialId,
 					provider: binding.providerId,
 					package_id: binding.packageId,
 					door_secret_name: binding.doorSecretName,

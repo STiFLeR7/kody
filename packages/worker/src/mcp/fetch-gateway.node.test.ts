@@ -142,6 +142,7 @@ function userSecret(
 	allowedPackages: Array<string> = [],
 ): secretService.ResolvedSecret {
 	return {
+		credentialId: `cred-${value}`,
 		found: true,
 		value,
 		scope: 'user',
@@ -408,7 +409,10 @@ test('fetch gateway gates integration tokens by the connection grant and require
 		.mockResolvedValue(userSecret('oauth-access', ['example.com'], []))
 	const tokenSpy = vi
 		.spyOn(integrationCredentials, 'resolveIntegrationAccessToken')
-		.mockResolvedValue('oauth-access')
+		.mockResolvedValue({
+			credentialId: 'cred-integration',
+			accessToken: 'oauth-access',
+		})
 	const grantSpy = vi
 		.spyOn(integrationPackageAccess, 'assertCanUseIntegration')
 		.mockResolvedValue(undefined)
@@ -622,6 +626,7 @@ test('fetch gateway preserves request bodies and honors opt-out for text and bin
 		name === 'discordBotToken'
 			? userSecret('secret-value', ['discord.com'])
 			: {
+					credentialId: null,
 					found: false,
 					value: null,
 					scope: null,
@@ -720,6 +725,7 @@ test('fetch gateway derives Basic Auth header and enforces host approval', async
 			name in hostsByName
 				? userSecret(values[name]!, hostsByName[name]!)
 				: {
+						credentialId: null,
 						found: false,
 						value: null,
 						scope: null,

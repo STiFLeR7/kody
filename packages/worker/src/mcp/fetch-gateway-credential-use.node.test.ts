@@ -37,11 +37,15 @@ async function createOrgDb() {
 	return db
 }
 
+const secretCredentialId = 'cred-secret-org-echo'
+const integrationCredentialId = 'cred-integration-org-google'
+
 function userSecret(
 	value: string,
 	allowedHosts: Array<string>,
 ): secretService.ResolvedSecret {
 	return {
+		credentialId: secretCredentialId,
 		found: true,
 		value,
 		scope: 'user',
@@ -106,6 +110,7 @@ test('ambient fetch placeholders require secret:use / integration:use for member
 		orgId: ownerId,
 		resourceType: 'package',
 		resourceId: packageId,
+		family: 'package',
 		subject: { type: 'user', id: collaboratorId },
 		preset: 'use',
 		permissions: null,
@@ -131,7 +136,10 @@ test('ambient fetch placeholders require secret:use / integration:use for member
 	vi.spyOn(
 		integrationCredentials,
 		'resolveIntegrationAccessToken',
-	).mockResolvedValue('oauth-access')
+	).mockResolvedValue({
+		credentialId: integrationCredentialId,
+		accessToken: 'oauth-access',
+	})
 	vi.spyOn(integrationService, 'getJoinedIntegration').mockResolvedValue({
 		lane: 'user',
 		app: { apiBaseUrl: 'https://example.com' },
@@ -229,8 +237,9 @@ test('ambient fetch placeholders require secret:use / integration:use for member
 		code: 'missing_permission',
 		permission: 'secret:use',
 		resource: expect.objectContaining({
-			type: 'secret',
-			id: 'orgEcho',
+			type: 'credential',
+			id: secretCredentialId,
+			label: 'orgEcho',
 		}),
 	})
 	expect(String(memberSecretError)).toMatch(/Missing secret:use/)
@@ -244,8 +253,9 @@ test('ambient fetch placeholders require secret:use / integration:use for member
 		code: 'missing_permission',
 		permission: 'integration:use',
 		resource: expect.objectContaining({
-			type: 'integration',
-			id: 'orgGoogle',
+			type: 'credential',
+			id: integrationCredentialId,
+			label: 'orgGoogle',
 		}),
 	})
 	expect(String(memberIntegrationError)).toMatch(/Missing integration:use/)
@@ -272,14 +282,15 @@ test('ambient fetch placeholders require secret:use / integration:use for member
 		permission: 'integration:use',
 	})
 
-	// Grant secret:use / integration:use on those resources → member may use.
+	// Grant Use on those credential ids → member may use.
 	// Fresh request contexts: effective permissions are cached per request
 	// object, so reusing the pre-grant memberRequest would keep the denial.
 	await upsertGrant({
 		db,
 		orgId: ownerId,
-		resourceType: 'secret',
-		resourceId: 'orgEcho',
+		resourceType: 'credential',
+		resourceId: secretCredentialId,
+		family: 'secret',
 		subject: { type: 'user', id: memberId },
 		preset: 'use',
 		permissions: null,
@@ -289,8 +300,9 @@ test('ambient fetch placeholders require secret:use / integration:use for member
 	await upsertGrant({
 		db,
 		orgId: ownerId,
-		resourceType: 'integration',
-		resourceId: 'orgGoogle',
+		resourceType: 'credential',
+		resourceId: integrationCredentialId,
+		family: 'integration',
 		subject: { type: 'user', id: memberId },
 		preset: 'use',
 		permissions: null,

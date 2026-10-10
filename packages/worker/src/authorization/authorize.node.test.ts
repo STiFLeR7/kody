@@ -328,7 +328,7 @@ test('a connection profile narrows the package resources it lists', () => {
 	expect(checkPermission(profiled, 'package:read').allowed).toBe(true)
 	expect(
 		checkPermission(profiled, 'secret:use', {
-			type: 'secret',
+			type: 'credential',
 			id: 'token',
 			orgId: ownerIdFromStored('org-1'),
 		}).allowed,

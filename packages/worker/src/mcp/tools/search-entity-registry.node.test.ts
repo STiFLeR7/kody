@@ -81,6 +81,7 @@ function createJoinedIntegration(input: {
 		},
 		connection: {
 			userId,
+			credentialId: 'cred-integration',
 			name: input.name,
 			appSlug,
 			platformAppSlug: null,

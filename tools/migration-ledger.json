@@ -411,6 +411,10 @@
 		{
 			"filename": "0102-usage-connection-daily.sql",
 			"sha256": "370322c201b9e5592d0f1e05d74331024e716e442dea01eb61971d080475520f"
+		},
+		{
+			"filename": "0103-credential-ids-and-grants.sql",
+			"sha256": "2780b8a34c18c9cd689206eacb66362175a4dc7514e5e79820a6092f1746fdb6"
 		}
 	]
 }

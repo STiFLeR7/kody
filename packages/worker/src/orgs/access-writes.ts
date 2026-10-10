@@ -9,6 +9,7 @@ import {
 } from '@kody-internal/shared/grant-presets.ts'
 import {
 	isOrgPermission,
+	type OrgGrantResourceType,
 	type OrgPermission,
 	type OrgResourceType,
 } from '@kody-internal/shared/org-permissions.ts'
@@ -60,13 +61,15 @@ function changesOf(result: unknown) {
 	return 1
 }
 
-/** Resource types a grant may target. `org` is organization-level permissions. */
+/**
+ * Resource types a grant may target. `org` is organization-level permissions.
+ * `credential` grants are keyed by stable credential id.
+ */
 export const grantResourceTypes = [
 	'package',
 	'app',
 	'job',
-	'secret',
-	'integration',
+	'credential',
 	'memory',
 	'email',
 	'org',
@@ -75,7 +78,7 @@ export const grantResourceTypes = [
 export type GrantResourceType = (typeof grantResourceTypes)[number]
 
 type MissingGrantResource = Exclude<
-	OrgResourceType,
+	OrgGrantResourceType,
 	Exclude<GrantResourceType, 'org'>
 >
 const grantResourceTypesCoverOrgResources: MissingGrantResource extends never
@@ -236,8 +239,10 @@ export async function removeTeamMember(input: {
 export async function upsertGrant(input: {
 	db: D1Database
 	orgId: string
-	resourceType: OrgResourceType | 'org'
+	resourceType: GrantResourceType
 	resourceId: string
+	/** The permission family presets and checklists resolve against. */
+	family: OrgResourceType | 'org'
 	subject: GrantSubject
 	preset: GrantPreset | null
 	permissions: ReadonlyArray<OrgPermission> | null
@@ -245,7 +250,7 @@ export async function upsertGrant(input: {
 	audit: OrgAuditWriter
 }) {
 	const permissions = resolveGrantPermissions({
-		resourceType: input.resourceType,
+		family: input.family,
 		preset: input.preset,
 		permissions: input.permissions,
 	})
@@ -517,7 +522,7 @@ export async function createInvite(input: {
 	kind: InviteKind
 	role?: OrgRole | null
 	teamIds?: ReadonlyArray<string> | null
-	resourceType?: OrgResourceType | 'org' | null
+	resourceType?: GrantResourceType | null
 	resourceId?: string | null
 	preset?: GrantPreset | null
 	permissions?: ReadonlyArray<OrgPermission> | null

@@ -13,6 +13,7 @@ import {
 const listPackageScopeSecretFixedBindings = 2
 
 type SecretMetadataRow = {
+	id: string
 	scope: SecretScope
 	binding_key: string
 	name: string
@@ -82,7 +83,7 @@ export async function getSecretEntry(input: {
 }): Promise<SecretEntryRow | null> {
 	const row = await input.db
 		.prepare(
-			`SELECT bucket_id, name, description, encrypted_value, allowed_hosts, allowed_packages, expires_at, created_at, updated_at
+			`SELECT id, bucket_id, name, description, encrypted_value, allowed_hosts, allowed_packages, expires_at, created_at, updated_at
 			FROM secret_entries
 			WHERE bucket_id = ? AND name = ?
 			${andLiveDeletedAtSql()} LIMIT 1`,
@@ -94,7 +95,7 @@ export async function getSecretEntry(input: {
 
 function prepareUpsertSecretEntryStatement(input: {
 	db: D1Database
-	row: Omit<SecretEntryRow, 'created_at' | 'updated_at'> & {
+	row: Omit<SecretEntryRow, 'id' | 'created_at' | 'updated_at'> & {
 		created_at?: string
 		updated_at?: string
 	}
@@ -129,7 +130,7 @@ function prepareUpsertSecretEntryStatement(input: {
 
 export async function upsertSecretEntry(input: {
 	db: D1Database
-	row: Omit<SecretEntryRow, 'created_at' | 'updated_at'> & {
+	row: Omit<SecretEntryRow, 'id' | 'created_at' | 'updated_at'> & {
 		created_at?: string
 		updated_at?: string
 	}
@@ -145,7 +146,7 @@ export async function upsertSecretEntry(input: {
 export async function upsertSecretEntriesAtomically(input: {
 	db: D1Database
 	rows: Array<
-		Omit<SecretEntryRow, 'created_at' | 'updated_at'> & {
+		Omit<SecretEntryRow, 'id' | 'created_at' | 'updated_at'> & {
 			created_at?: string
 			updated_at?: string
 		}
@@ -357,7 +358,7 @@ export async function listSecretMetadataForBucket(input: {
 }): Promise<Array<SecretMetadataRow>> {
 	const { results } = await input.db
 		.prepare(
-			`SELECT ? AS scope, ? AS binding_key, name, description, allowed_hosts, allowed_packages, created_at, updated_at, expires_at AS entry_expires_at, ? AS bucket_expires_at
+			`SELECT id, ? AS scope, ? AS binding_key, name, description, allowed_hosts, allowed_packages, created_at, updated_at, expires_at AS entry_expires_at, ? AS bucket_expires_at
 			FROM secret_entries
 			WHERE bucket_id = ?${andLiveDeletedAtSql()}
 			ORDER BY name ASC`,
@@ -380,7 +381,7 @@ export async function listUserScopeSecretMetadata(input: {
 	const now = input.now ?? new Date().toISOString()
 	const { results } = await input.db
 		.prepare(
-			`SELECT b.scope, b.binding_key, e.name, e.description, e.allowed_hosts, e.allowed_packages, e.created_at, e.updated_at, e.expires_at AS entry_expires_at, b.expires_at AS bucket_expires_at
+			`SELECT e.id, b.scope, b.binding_key, e.name, e.description, e.allowed_hosts, e.allowed_packages, e.created_at, e.updated_at, e.expires_at AS entry_expires_at, b.expires_at AS bucket_expires_at
 			FROM secret_buckets b
 			JOIN secret_entries e ON e.bucket_id = b.id
 			WHERE b.user_id = ? AND b.scope = 'user'
@@ -413,7 +414,7 @@ export async function listSecretLocationsByNameForUser(input: {
 	const now = input.now ?? new Date().toISOString()
 	const { results } = await input.db
 		.prepare(
-			`SELECT b.scope, b.binding_key, e.name, e.expires_at AS entry_expires_at, b.expires_at AS bucket_expires_at
+			`SELECT e.id, b.scope, b.binding_key, e.name, e.expires_at AS entry_expires_at, b.expires_at AS bucket_expires_at
 			FROM secret_buckets b
 			JOIN secret_entries e ON e.bucket_id = b.id
 			WHERE b.user_id = ? AND e.name = ?
@@ -454,7 +455,7 @@ export async function listPackageScopeSecretMetadata(input: {
 		const placeholders = idChunk.map(() => '?').join(', ')
 		const { results } = await input.db
 			.prepare(
-				`SELECT b.scope, b.binding_key, e.name, e.description, e.allowed_hosts, e.allowed_packages, e.created_at, e.updated_at, e.expires_at AS entry_expires_at, b.expires_at AS bucket_expires_at
+				`SELECT e.id, b.scope, b.binding_key, e.name, e.description, e.allowed_hosts, e.allowed_packages, e.created_at, e.updated_at, e.expires_at AS entry_expires_at, b.expires_at AS bucket_expires_at
 				FROM secret_buckets b
 				JOIN secret_entries e ON e.bucket_id = b.id
 				WHERE b.user_id = ? AND b.scope = 'package'
@@ -485,6 +486,7 @@ function mapSecretBucketRow(row: Record<string, unknown>): SecretBucketRow {
 
 function mapSecretEntryRow(row: Record<string, unknown>): SecretEntryRow {
 	return {
+		id: String(row['id']),
 		bucket_id: String(row['bucket_id']),
 		name: String(row['name']),
 		description: String(row['description']),
@@ -507,6 +509,7 @@ function mapSecretMetadataRow(row: Record<string, unknown>): SecretMetadataRow {
 				: String(row['expires_at'])
 			: String(row['bucket_expires_at'])
 	return {
+		id: String(row['id']),
 		scope: String(row['scope']) as SecretScope,
 		binding_key: String(row['binding_key']),
 		name: String(row['name']),

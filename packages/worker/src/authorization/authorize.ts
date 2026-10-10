@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
 	orgPermissions,
+	type OrgGrantResourceType,
 	type OrgPermission,
-	type OrgResourceType,
 } from '@kody-internal/shared/org-permissions.ts'
 import {
 	ownerIdFromStored,
@@ -24,10 +24,10 @@ import {
 
 /** A concrete org resource a permission is checked on. */
 export type OrgResource = {
-	type: OrgResourceType
+	type: OrgGrantResourceType
 	id: string
 	orgId: OwnerId
-	/** Human-readable name for denial messages (package name, inbox address). */
+	/** Human-readable name for denial messages (package name, credential name, inbox address). */
 	label?: string
 }
 

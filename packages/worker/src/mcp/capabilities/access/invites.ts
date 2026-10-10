@@ -1,6 +1,9 @@
-import { resolveGrantPermissions } from '@kody-internal/shared/grant-presets.ts'
 import { timingSafeEqualString } from '@kody-internal/shared/timing-safe.ts'
-import { type OrgPermission } from '@kody-internal/shared/org-permissions.ts'
+import { resolveGrantPermissions } from '@kody-internal/shared/grant-presets.ts'
+import {
+	type OrgPermission,
+	type OrgResourceType,
+} from '@kody-internal/shared/org-permissions.ts'
 import { type OrgRole } from '@kody-internal/shared/request-context.ts'
 import { z } from 'zod'
 import { McpCallerError } from '#mcp/caller-error.ts'
@@ -29,6 +32,10 @@ import {
 	type GrantResourceType,
 	type StoredInvite,
 } from '#worker/orgs/access-writes.ts'
+import {
+	credentialPermissionFamily,
+	getOrgCredential,
+} from '#worker/credentials/credential-ids.ts'
 import { assertCanAcceptFreeOrgOwnership } from '#worker/orgs/billing.ts'
 import { isPersonalOrg } from '#worker/orgs/is-personal-org.ts'
 import { isOrgActive } from '#worker/orgs/repo.ts'
@@ -39,6 +46,7 @@ import {
 } from '#worker/orgs/org-audit.ts'
 import { syncSeatsAfterMembershipChange } from '#worker/orgs/seat-sync-after-membership.ts'
 import {
+	authorizeGrantRevoke,
 	authorizeGrantTarget,
 	generateInviteToken,
 	grantPresetSchema,
@@ -158,22 +166,69 @@ async function assertInviterStillValid(db: D1Database, invite: StoredInvite) {
 	}
 }
 
+/**
+ * The permission family a grant invite resolves against. A credential must
+ * still exist and be live: an invite never creates a grant on a deleted id.
+ */
+async function grantInviteFamily(
+	db: D1Database,
+	orgId: string,
+	resourceType: GrantResourceType,
+	resourceId: string,
+): Promise<OrgResourceType | 'org'> {
+	switch (resourceType) {
+		case 'credential': {
+			const credential = await getOrgCredential(db, orgId, resourceId)
+			if (!credential?.live) {
+				throw new McpCallerError(
+					'This invite is no longer valid because its credential was deleted.',
+				)
+			}
+			return credentialPermissionFamily(credential.kind)
+		}
+		case 'org':
+		case 'package':
+		case 'app':
+		case 'job':
+		case 'memory':
+		case 'email':
+			return resourceType
+		default: {
+			const exhaustive: never = resourceType
+			throw new Error(`Unhandled grant resource type: ${String(exhaustive)}`)
+		}
+	}
+}
+
+type GrantInviteTarget = {
+	resourceType: GrantResourceType
+	resourceId: string
+	family: OrgResourceType | 'org'
+}
+
 async function assertInviteTargetsStillValid(
 	db: D1Database,
 	invite: StoredInvite,
-) {
+): Promise<GrantInviteTarget | null> {
 	const kind = invite.kind
 	switch (kind) {
 		case 'membership':
 			await assertTeamsInOrg(db, invite.orgId, invite.teamIds)
-			return
+			return null
 		case 'grant': {
-			if (!invite.resourceType || !invite.resourceId) {
+			const { resourceType, resourceId } = invite
+			if (!resourceType || !resourceId) {
 				throw new McpCallerError('This grant invite is missing a resource.')
 			}
+			const family = await grantInviteFamily(
+				db,
+				invite.orgId,
+				resourceType,
+				resourceId,
+			)
 			try {
 				resolveGrantPermissions({
-					resourceType: invite.resourceType,
+					family,
 					preset: invite.preset,
 					permissions: invite.permissions,
 				})
@@ -182,7 +237,7 @@ async function assertInviteTargetsStillValid(
 					error instanceof Error ? error.message : 'Invalid grant invite.',
 				)
 			}
-			return
+			return { resourceType, resourceId, family }
 		}
 		default: {
 			const exhaustive: never = kind
@@ -205,7 +260,7 @@ async function acceptStoredInvite(input: {
 		)
 	}
 	await assertInviterStillValid(input.db, invite)
-	await assertInviteTargetsStillValid(input.db, invite)
+	const grantTarget = await assertInviteTargetsStillValid(input.db, invite)
 	if (invite.kind === 'membership' && (invite.role ?? 'member') === 'owner') {
 		await assertCanAcceptFreeOrgOwnership({
 			db: input.db,
@@ -262,14 +317,15 @@ async function acceptStoredInvite(input: {
 			break
 		}
 		case 'grant': {
-			if (!invite.resourceType || !invite.resourceId) {
+			if (!grantTarget) {
 				throw new McpCallerError('This grant invite is missing a resource.')
 			}
 			await upsertGrant({
 				db: input.db,
 				orgId: invite.orgId,
-				resourceType: invite.resourceType,
-				resourceId: invite.resourceId,
+				resourceType: grantTarget.resourceType,
+				resourceId: grantTarget.resourceId,
+				family: grantTarget.family,
 				subject: { type: 'user', id: input.acceptedByUserId },
 				preset: invite.preset,
 				permissions: invite.permissions,
@@ -386,13 +442,13 @@ export const inviteCreateCapability = defineDomainCapability(
 							preset: args.preset,
 							permissions,
 						})
-						await authorizeGrantTarget(
+						const scoped = await authorizeGrantTarget(
 							ctx,
 							args.resource_type,
 							args.resource_id,
 						)
 						const resolved = await resolveAuthorizedGrantPermissions(ctx, {
-							resourceType: args.resource_type,
+							family: scoped.family,
 							preset: args.preset,
 							permissions,
 						})
@@ -568,7 +624,7 @@ export const inviteRevokeCapability = defineDomainCapability(
 								'This grant invite is missing a resource.',
 							)
 						}
-						await authorizeGrantTarget(
+						await authorizeGrantRevoke(
 							ctx,
 							invite.resourceType,
 							invite.resourceId,

@@ -19,14 +19,16 @@ import { type PackageStamp } from './package-stamp.ts'
 export const credentialResolveAuditAction = 'credential.resolve'
 
 /**
- * Which credential a resolution is for. `resourceKey` is today's resource key
- * (secret name, integration or MCP server name, vault provider id); stable
- * credential ids replace it once credentials have them.
+ * Which credential a resolution is for. The row's resource id is the stable
+ * credential id once the door finds the credential (null when it does not);
+ * the name the caller asked for goes in the details.
  */
 export type CredentialAuditSubject = {
 	use: string
 	resourceType: 'secret' | 'secret-provider' | 'integration' | 'mcp-server'
-	resourceKey: string
+	/** Secret, integration, or MCP server name, or vault provider id. */
+	name: string
+	credentialId: string | null
 	details?: Record<string, string | null>
 }
 
@@ -84,7 +86,7 @@ export function scheduleCredentialResolutionAudit(input: {
 		orgId: input.orgId,
 		action: credentialResolveAuditAction,
 		resourceType: subject.resourceType,
-		resourceId: subject.resourceKey,
+		resourceId: subject.credentialId,
 		result: outcome.result,
 	}
 	waitUntil(
@@ -99,6 +101,7 @@ export function scheduleCredentialResolutionAudit(input: {
 				credentialId: request?.credential.id ?? null,
 				details: {
 					use: subject.use,
+					name: subject.name,
 					actorKind: actorKind(request),
 					ownerKind: 'org',
 					packageStampKind: input.packageStamp?.kind ?? 'none',

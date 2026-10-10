@@ -16,7 +16,24 @@ const resourceActions = {
 	email: ['read', 'send', 'write', 'delete', 'manage_access'],
 } as const
 
+/** A permission family: the `resource-type` half of a permission string. */
 export type OrgResourceType = keyof typeof resourceActions
+
+/** Permission families that belong to credentials rather than to a resource type of their own. */
+export type CredentialPermissionFamily = Extract<
+	OrgResourceType,
+	'secret' | 'integration'
+>
+
+/**
+ * What a grant or per-resource check targets. Secrets, OAuth integrations,
+ * MCP servers, and vault bindings are one `credential` type keyed by a
+ * stable credential id; their permissions keep the `secret:*` and
+ * `integration:*` families.
+ */
+export type OrgGrantResourceType =
+	| Exclude<OrgResourceType, CredentialPermissionFamily>
+	| 'credential'
 
 const orgResourceTypes = Object.keys(resourceActions) as Array<OrgResourceType>
 

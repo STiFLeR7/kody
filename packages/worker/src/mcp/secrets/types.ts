@@ -15,6 +15,8 @@ export type SecretBucketRow = {
 }
 
 export type SecretEntryRow = {
+	/** Stable credential id, assigned by the database on insert. */
+	id: string
 	bucket_id: string
 	name: string
 	description: string
@@ -38,6 +40,9 @@ export type SecretMetadata = {
 	expiresAt: string | null
 	ttlMs: number | null
 }
+
+/** Listed secrets carry the credential id that grants are keyed by. */
+export type ListedSecret = SecretMetadata & { credentialId: string }
 
 export type SecretSearchRow = Pick<
 	SecretMetadata,

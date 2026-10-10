@@ -37,6 +37,7 @@ vi.mock('#worker/integrations/service.ts', () => ({
 vi.mock('#worker/integrations/credentials.ts', () => ({
 	resolveIntegrationAccessToken: (...args: Array<unknown>) =>
 		integrationMocks.resolveIntegrationAccessToken(...args),
+	findIntegrationCredentialId: async () => 'cred-integration',
 }))
 
 vi.mock('#worker/integrations/package-access.ts', async (importOriginal) => ({
@@ -94,6 +95,10 @@ type Destination = Parameters<typeof applyWebhookUrlForUser>[0]['destination']
 const redirectError = 'Destination redirected. Apply does not follow redirects.'
 const hooksRegister = 'https://hooks.example/register'
 
+function storedToken(accessToken: string) {
+	return { credentialId: 'cred-integration', accessToken }
+}
+
 function mockIntegration(name = 'github', host = 'api.github.com') {
 	integrationMocks.getJoinedIntegration.mockResolvedValue({
 		lane: 'user',
@@ -105,7 +110,9 @@ function mockIntegration(name = 'github', host = 'api.github.com') {
 			allowedPackageIds: [],
 		},
 	})
-	integrationMocks.resolveIntegrationAccessToken.mockResolvedValue('ghs_test')
+	integrationMocks.resolveIntegrationAccessToken.mockResolvedValue(
+		storedToken('ghs_test'),
+	)
 	integrationMocks.assertCanUseIntegration.mockResolvedValue(undefined)
 }
 
@@ -530,8 +537,8 @@ test('webhookUrlApply redacts refreshed Authorization tokens after 401 retry', a
 	const refreshedToken = 'tok_refreshed_apply_auth'
 	mockIntegration('hooks', 'hooks.example')
 	integrationMocks.resolveIntegrationAccessToken
-		.mockResolvedValueOnce(initialToken)
-		.mockResolvedValue(refreshedToken)
+		.mockResolvedValueOnce(storedToken(initialToken))
+		.mockResolvedValue(storedToken(refreshedToken))
 	integrationMocks.refreshIntegrationTokens.mockResolvedValue({
 		refreshed: true,
 		refreshedAt: new Date(0).toISOString(),
@@ -568,7 +575,7 @@ test('webhookUrlApply returns the original 401 when the integration refresh is n
 	const { apply } = await setupOwner()
 	mockIntegration('hooks', 'hooks.example')
 	integrationMocks.resolveIntegrationAccessToken.mockResolvedValue(
-		'gho_non_expiring',
+		storedToken('gho_non_expiring'),
 	)
 	integrationMocks.refreshIntegrationTokens.mockResolvedValue({
 		refreshed: false,
@@ -594,7 +601,9 @@ test('webhookUrlApply returns the original 401 when the integration refresh is n
 test('webhookUrlApply cancels the original 401 body when the integration refresh throws', async () => {
 	const { apply } = await setupOwner()
 	mockIntegration('hooks', 'hooks.example')
-	integrationMocks.resolveIntegrationAccessToken.mockResolvedValue('ya29_lost')
+	integrationMocks.resolveIntegrationAccessToken.mockResolvedValue(
+		storedToken('ya29_lost'),
+	)
 	integrationMocks.refreshIntegrationTokens.mockRejectedValue(
 		new Error('missing refresh token'),
 	)

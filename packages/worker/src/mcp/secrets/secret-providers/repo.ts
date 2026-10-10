@@ -5,6 +5,7 @@ import {
 
 import { andLiveDeletedAtSql } from '#worker/soft-delete/live-sql.ts'
 type BindingRow = {
+	id: string
 	user_id: string
 	provider_id: string
 	package_id: string
@@ -43,6 +44,7 @@ export function parseSecretProviderConfigJson(
 
 function toBindingRecord(row: BindingRow): SecretProviderBindingRecord {
 	return {
+		credentialId: row.id,
 		userId: row.user_id,
 		providerId: row.provider_id,
 		packageId: row.package_id,
@@ -138,7 +140,7 @@ export async function getSecretProviderBinding(
 ): Promise<SecretProviderBindingRecord | null> {
 	const row = await db
 		.prepare(
-			`SELECT user_id, provider_id, package_id, door_secret_name, config_json,
+			`SELECT id, user_id, provider_id, package_id, door_secret_name, config_json,
 				created_at, updated_at
 			FROM secret_provider_bindings
 			WHERE user_id = ? AND provider_id = ?${andLiveDeletedAtSql()}`,
@@ -154,7 +156,7 @@ export async function listSecretProviderBindings(
 ): Promise<Array<SecretProviderBindingRecord>> {
 	const result = await db
 		.prepare(
-			`SELECT user_id, provider_id, package_id, door_secret_name, config_json,
+			`SELECT id, user_id, provider_id, package_id, door_secret_name, config_json,
 				created_at, updated_at
 			FROM secret_provider_bindings
 			WHERE user_id = ?${andLiveDeletedAtSql()}
