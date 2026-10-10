@@ -110,6 +110,29 @@ export async function credentialGranteeProofs(
 	}
 }
 
+/** Credential ids of alice's org-level user secret and integration. */
+async function aliceCredentialIds(session: RehearsalSession) {
+	const secrets = readRecord(
+		await callCapability(session, 'secretList', { scope: 'user' }),
+		'secretList',
+	).secrets
+	const integrations = readRecord(
+		await callCapability(session, 'integrationList'),
+		'integrationList',
+	).integrations
+	const secret = (Array.isArray(secrets) ? secrets : []).find(
+		(entry) => readRecord(entry, 'secretList entry').name === userSecretName,
+	)
+	const integration = (Array.isArray(integrations) ? integrations : []).find(
+		(entry) =>
+			readRecord(entry, 'integrationList entry').name === integrationName,
+	)
+	return [
+		readStringAt(secret, ['credential_id'], 'secretList entry'),
+		readStringAt(integration, ['credentialId'], 'integrationList entry'),
+	]
+}
+
 function randomSecretValue() {
 	return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString(
 		'base64url',
@@ -773,13 +796,10 @@ export async function seedRehearsal(
 				`carol could not run alice's package: ${JSON.stringify(granteeRun)}`,
 			)
 		}
-		for (const [resourceType, resourceId] of [
-			['secret', userSecretName],
-			['integration', integrationName],
-		] as const) {
+		for (const credentialId of await aliceCredentialIds(alice)) {
 			await callCapability(alice, 'accessGrant', {
-				resource_type: resourceType,
-				resource_id: resourceId,
+				resource_type: 'credential',
+				resource_id: credentialId,
 				subject_type: 'user',
 				username: rehearsalUser('carol').username,
 				preset: 'use',
