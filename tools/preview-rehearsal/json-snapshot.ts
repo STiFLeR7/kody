@@ -12,6 +12,7 @@ import {
 } from './rehearsal-packages.ts'
 import {
 	callCapability,
+	credentialGranteeProofs,
 	integrationProofModule,
 	packageExportModule,
 	userSecretProofModule,
@@ -249,6 +250,46 @@ async function snapshotOrg(
 	}
 }
 
+/**
+ * carol, bound to alice's org, uses alice's user secret and integration
+ * through her per-credential Use grants. The secret proof hash matches
+ * alice's own, so a migration that drops or re-keys those grants shows up.
+ */
+async function snapshotCredentialGrantee(
+	origins: RehearsalOrigins,
+	grantee: SnapshotUser,
+	owner: SnapshotUser,
+	capture: Capture,
+) {
+	const check = (name: string) => `grantee.${name}`
+	let session: RehearsalSession
+	try {
+		session = await openRehearsalSession(origins.app, grantee, {
+			orgSlug: owner.orgSlug,
+		})
+	} catch (error) {
+		return {
+			session: await capture(check('session'), async () => {
+				throw error
+			}),
+		}
+	}
+	try {
+		return {
+			grantee: grantee.role,
+			org: owner.orgSlug,
+			proofs: await capture(check('credentialProofs'), () =>
+				credentialGranteeProofs(
+					session,
+					`${origins.mockCloudflare}/__mocks/rehearsal/echo`,
+				),
+			),
+		}
+	} finally {
+		await session.close()
+	}
+}
+
 function listedPackageIds(listing: unknown) {
 	const packages = (listing as { packages?: unknown } | null)?.packages
 	if (!Array.isArray(packages)) return []
@@ -284,6 +325,7 @@ export type JsonSnapshot = {
 	admin: Record<string, unknown>
 	people: Array<Awaited<ReturnType<typeof snapshotPerson>>>
 	org: Awaited<ReturnType<typeof snapshotOrg>>
+	grantee: Awaited<ReturnType<typeof snapshotCredentialGrantee>>
 	failures: Array<SnapshotCheckFailure>
 }
 
@@ -346,6 +388,18 @@ export async function takeJsonSnapshot(input: {
 	}
 	log(`Snapshotting @${rehearsalOrg.slug} as ${orgOwner.role}...`)
 	const org = await snapshotOrg(input.origins, orgOwner, capture)
+	const carol = input.users.find((user) => user.role === 'carol')
+	const alice = input.users.find((user) => user.role === 'alice')
+	if (!carol || !alice) {
+		throw new Error('Snapshot needs the alice and carol credentials.')
+	}
+	log('Snapshotting carol using alice credentials through her grants...')
+	const grantee = await snapshotCredentialGrantee(
+		input.origins,
+		carol,
+		alice,
+		capture,
+	)
 	const shared = findPackagesListedByMoreThanOneOwner({
 		...Object.fromEntries(
 			people.map((person) => [person.role, person.packages]),
@@ -367,6 +421,7 @@ export async function takeJsonSnapshot(input: {
 		admin: adminView,
 		people,
 		org,
+		grantee,
 		failures,
 	}
 }

@@ -48,7 +48,10 @@ export async function callCapability<T = Record<string, unknown>>(
 	input: Record<string, unknown> = {},
 ) {
 	try {
-		return (await session.execute(capabilityModule, { capability, input })) as T
+		return (await session.execute(capabilityModule, {
+			capability,
+			input,
+		})) as T
 	} catch (error) {
 		throw new Error(
 			`${capability} as ${session.email} failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -86,6 +89,26 @@ export const integrationProofModule = (echoUrl: string) =>
 		'\treturn { status: response.status, bearerSent: Boolean(body?.sha256?.authorization) }',
 		'}',
 	].join('\n')
+
+/**
+ * The grantee (carol, bound to alice's org) uses alice's user secret and
+ * integration as ad-hoc code, which needs her per-credential Use grants.
+ */
+export async function credentialGranteeProofs(
+	session: RehearsalSession,
+	echoUrl: string,
+) {
+	return {
+		secret: readRecord(
+			await session.execute(userSecretProofModule(echoUrl)),
+			'grantee secret proof',
+		),
+		integration: readRecord(
+			await session.execute(integrationProofModule(echoUrl)),
+			'grantee integration proof',
+		),
+	}
+}
 
 function randomSecretValue() {
 	return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString(
@@ -719,7 +742,7 @@ export async function seedRehearsal(
 		tokens.set('admin', await mintTokens(admin, input.origins, 'admin'))
 
 		log(
-			'Grants: alice grants carol Use on her package, carol invites alice (pending)...',
+			'Grants: alice grants carol Use on her package, secret, and integration; carol invites alice (pending)...',
 		)
 		const alice = personSessions.get('alice')
 		const carolSession = personSessions.get('carol')
@@ -748,6 +771,30 @@ export async function seedRehearsal(
 		if (granteeRun.pong !== true) {
 			throw new Error(
 				`carol could not run alice's package: ${JSON.stringify(granteeRun)}`,
+			)
+		}
+		for (const [resourceType, resourceId] of [
+			['secret', userSecretName],
+			['integration', integrationName],
+		] as const) {
+			await callCapability(alice, 'accessGrant', {
+				resource_type: resourceType,
+				resource_id: resourceId,
+				subject_type: 'user',
+				username: rehearsalUser('carol').username,
+				preset: 'use',
+			})
+		}
+		const granteeProofs = await credentialGranteeProofs(
+			carolInAliceOrg,
+			`${input.origins.mockCloudflare}/__mocks/rehearsal/echo`,
+		)
+		if (
+			granteeProofs.secret.sha256 !== alicePackage?.userSecretSha256 ||
+			granteeProofs.integration.bearerSent !== true
+		) {
+			throw new Error(
+				`carol could not use alice's secret and integration through her Use grants: ${JSON.stringify(granteeProofs)}`,
 			)
 		}
 		const pending = await callCapability(carolSession, 'inviteCreate', {
