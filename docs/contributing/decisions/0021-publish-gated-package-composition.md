@@ -36,8 +36,9 @@ Keep Kody publish-gated and snapshot-isolated:
   needs `package:execute`, not per-credential Use. Ad hoc `execute` has no
   package attachment: it may still resolve org credentials by name, but only
   when the acting person holds `secret:use` / `integration:use` on that concrete
-  resource ([ADR 0062](./0062-one-access-check.md)). There is no ambient skip of
-  org RBAC.
+  credential, by its stable credential id
+  ([ADR 0062](./0062-one-access-check.md)). There is no ambient skip of org
+  RBAC.
 
 **Amended (2026-10-10):** Before Teams, "ad hoc execute stays ambient" was read
 as skipping per-resource use checks. With org members and outside collaborators,

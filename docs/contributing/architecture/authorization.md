@@ -75,17 +75,33 @@ Profiles and the signed-in step are the other denials that can fire.
 1. re-checks that the acting person still has access to `orgId` (live
    membership, team, or outside-collaborator grant; org active), once per
    request context;
-2. calls `authorize` with `secret:use` or `integration:use` on the credential
-   unless the package stamp is `attested` (hosted bundler provenance, package
-   apps, webhooks). Ad hoc code (no stamp) and `claimed` stamps (CLI `--local`
+2. calls `authorize` with `secret:use` or `integration:use` on the `credential`
+   resource of the row that resolved, by its stable credential id, unless the
+   package stamp is `attested` (hosted bundler provenance, package apps,
+   webhooks). Ad hoc code (no stamp) and `claimed` stamps (CLI `--local`
    CapabilityProxy) always need Use; a claimed stamp is checked for
-   `package:execute` only and is never secret authority;
+   `package:execute` only and is never secret authority. A name with no
+   credential is checked against a target no grant names, so a non-holder gets a
+   denial rather than a not-found;
 3. applies the package rules (allowlists, usageMode, provider grants), then
    reads storage;
 4. schedules one `credential.resolve` row in `org_audit_events` per resolution
    (success, not found, denied, failed) via `waitUntil`, with the actor, the
-   credential's resource key, owner kind, and package stamp kind. It never holds
-   the value.
+   credential id (null when nothing resolved) and requested name, owner kind,
+   and package stamp kind. It never holds the value.
+
+**Credential ids and grants.** Org secrets, OAuth integrations, MCP servers, and
+vault bindings each have a stable credential id: the database assigns one on
+insert (`secret_entries.id`, `user_integrations.id`,
+`secret_provider_bindings.id`; an MCP server's id is its `mcp_server_settings`
+row id) and an upsert keeps it. Grants on them use one resource type,
+`credential`, keyed by that id (`credentials/credential-ids.ts`); the
+permissions stay `secret:*` for secrets and vault bindings and `integration:*`
+for integrations and MCP servers. Renaming a credential keeps its grants, and a
+name deleted then recreated gets a new id with no grants. A vault binding is its
+own credential: Use on its door-key secret is not Use on the vault.
+`secretList`, `integrationList`, `mcpServerList`, and `secretProviderList`
+return the ids that `accessGrant` takes.
 
 `credential-storage-boundary.node.test.ts` fails if credential storage is read
 outside the door. Credential storage keys use `ownerIdFromCaller` (org id), not

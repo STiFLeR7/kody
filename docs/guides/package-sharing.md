@@ -112,8 +112,11 @@ When Jesse runs **your** stamped package in your org:
 - Package-authority runs skip ambient `secret:use`; the package still needs
   `package:execute`, and each secret/integration must allow that package (host
   allowlist, `allowed_packages`, or self-authored rules for user secrets)
-- Ad-hoc `{{secret:…}}` in Jesse's own code needs a separate `secret:use` /
-  `integration:use` grant on that credential
+- Ad-hoc `{{secret:…}}` in Jesse's own code needs a separate Use grant on that
+  credential: `accessGrant` with `resource_type: "credential"` and the
+  `credential_id` from `secretList` (or `integrationList`, `mcpServerList`,
+  `secretProviderList`). The grant follows the credential if it is renamed, and
+  ends if it is deleted
 
 See [Secrets](/docs/secrets) for placeholders and allowlists.
 
