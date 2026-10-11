@@ -272,6 +272,32 @@ test('0103 fails loudly on a secret grant that names a vault door key', () => {
 	expect(() => runMigration(sqlite)).toThrow(/CHECK constraint failed/)
 })
 
+test('0103 fails loudly when a secret grant or invite name is also a package secret', () => {
+	for (const insert of [
+		(sqlite: DatabaseSync) =>
+			insertGrant(sqlite, {
+				id: 'grant-also-scoped',
+				resourceType: 'secret',
+				resourceId: 'OPENAI_KEY',
+				permissions: ['secret:use'],
+			}),
+		(sqlite: DatabaseSync) =>
+			insertInvite(sqlite, {
+				id: 'invite-also-scoped',
+				resourceType: 'secret',
+				resourceId: 'OPENAI_KEY',
+			}),
+	]) {
+		const sqlite = databaseBeforeMigration()
+		sqlite.exec(`
+			INSERT INTO secret_entries (bucket_id, name, encrypted_value)
+			VALUES ('bucket-a-pkg', 'OPENAI_KEY', 'ct');
+		`)
+		insert(sqlite)
+		expect(() => runMigration(sqlite)).toThrow(/CHECK constraint failed/)
+	}
+})
+
 test('the database assigns credential ids on insert, keeps them on upsert, and mints a new one on recreate', () => {
 	const sqlite = databaseBeforeMigration()
 	runMigration(sqlite)

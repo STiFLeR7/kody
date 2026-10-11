@@ -8,9 +8,9 @@
 --
 -- Fails closed (nothing applies) when any name-keyed grant or grant invite,
 -- live or revoked, maps to zero credentials or to more than one, or names a
--- vault door key (that grant also covered vault use, and one grant cannot
--- become two ids without changing who can use what). Grant and permission
--- counts must match before and after.
+-- vault door key or a package or session secret (that grant also covered
+-- those, and one grant cannot become two ids without changing who can use
+-- what). Grant and permission counts must match before and after.
 
 DROP TABLE IF EXISTS __migration_assertions;
 CREATE TABLE __migration_assertions (
@@ -182,6 +182,32 @@ FROM invites i
 JOIN secret_provider_bindings p
 	ON p.user_id = i.org_id AND p.door_secret_name = i.resource_id
 WHERE i.kind = 'grant' AND i.resource_type = 'secret';
+
+-- Resolution prefers a package or session secret over the org secret of the
+-- same name, so the name grant covered that secret too.
+INSERT INTO __migration_assertions (message)
+SELECT 'name-keyed secret grant ' || g.id
+	|| ' also covers a package or session secret; aborting 0103.'
+FROM grants g
+WHERE g.resource_type = 'secret'
+	AND EXISTS (
+		SELECT 1 FROM secret_entries e
+		JOIN secret_buckets b ON b.id = e.bucket_id
+		WHERE b.user_id = g.org_id AND NOT (b.scope = 'user' AND b.binding_key = '')
+			AND e.name = g.resource_id
+	);
+
+INSERT INTO __migration_assertions (message)
+SELECT 'name-keyed secret invite ' || i.id
+	|| ' also covers a package or session secret; aborting 0103.'
+FROM invites i
+WHERE i.kind = 'grant' AND i.resource_type = 'secret'
+	AND EXISTS (
+		SELECT 1 FROM secret_entries e
+		JOIN secret_buckets b ON b.id = e.bucket_id
+		WHERE b.user_id = i.org_id AND NOT (b.scope = 'user' AND b.binding_key = '')
+			AND e.name = i.resource_id
+	);
 
 -- 3. Counts before the rewrite.
 DROP TABLE IF EXISTS __credential_grant_counts;

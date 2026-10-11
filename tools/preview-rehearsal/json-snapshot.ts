@@ -252,8 +252,8 @@ async function snapshotOrg(
 
 /**
  * carol, bound to alice's org, uses alice's user secret and integration
- * through her per-credential Use grants. The secret proof hash matches
- * alice's own, so a migration that drops or re-keys those grants shows up.
+ * through her per-credential Use grants. Both proofs must match alice's own,
+ * so a migration that drops or mis-keys those grants records a failure.
  */
 async function snapshotCredentialGrantee(
 	origins: RehearsalOrigins,
@@ -263,6 +263,7 @@ async function snapshotCredentialGrantee(
 ) {
 	const check = (name: string) => `grantee.${name}`
 	let session: RehearsalSession
+	let ownerSession: RehearsalSession
 	try {
 		session = await openRehearsalSession(origins.app, grantee, {
 			orgSlug: owner.orgSlug,
@@ -275,18 +276,32 @@ async function snapshotCredentialGrantee(
 		}
 	}
 	try {
+		ownerSession = await openRehearsalSession(origins.app, owner, {
+			orgSlug: owner.orgSlug,
+		})
+	} catch (error) {
+		await session.close()
+		return {
+			session: await capture(check('ownerSession'), async () => {
+				throw error
+			}),
+		}
+	}
+	try {
 		return {
 			grantee: grantee.role,
 			org: owner.orgSlug,
 			proofs: await capture(check('credentialProofs'), () =>
-				credentialGranteeProofs(
-					session,
-					`${origins.mockCloudflare}/__mocks/rehearsal/echo`,
-				),
+				credentialGranteeProofs({
+					grantee: session,
+					owner: ownerSession,
+					echoUrl: `${origins.mockCloudflare}/__mocks/rehearsal/echo`,
+				}),
 			),
 		}
 	} finally {
 		await session.close()
+		await ownerSession.close()
 	}
 }
 
