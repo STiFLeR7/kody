@@ -432,7 +432,7 @@ test('consumeExecuteUniqueWorkerDay spends one unit per new worker per day, repe
 	})
 }, 30_000)
 
-test('UserMeter admitExecuteCall admits up to the per-minute limit and resets on the next minute', async () => {
+test('UserMeter admitExecuteCall admits up to the per-minute limit, resets on the next minute, and refuses identical repeats', async () => {
 	const user = await seedFreeUser('meter-execute-admission')
 	const minuteStart = Date.parse('2026-10-10T12:00:00.000Z')
 	const admit = (nowMs: number) =>
@@ -447,6 +447,7 @@ test('UserMeter admitExecuteCall admits up to the per-minute limit and resets on
 	})
 	await expect(admit(minuteStart + 45_000)).resolves.toEqual({
 		admitted: false,
+		reason: 'rate',
 		count: 2,
 		retryAfterMs: 15_000,
 	})
@@ -454,6 +455,31 @@ test('UserMeter admitExecuteCall admits up to the per-minute limit and resets on
 		admitted: true,
 		count: 1,
 	})
+	const repeat = { key: 'same-call', limit: 1, windowMs: 60_000 }
+	await expect(
+		user.meter.admitExecuteCall({
+			nowMs: minuteStart + 61_000,
+			limitPerMinute: 2,
+			repeat,
+		}),
+	).resolves.toEqual({ admitted: true, count: 2 })
+	await expect(
+		user.meter.admitExecuteCall({
+			nowMs: minuteStart + 62_000,
+			limitPerMinute: 3,
+			repeat,
+		}),
+	).resolves.toEqual({
+		admitted: false,
+		reason: 'repeat',
+		repeats: 1,
+		retryAfterMs: 59_000,
+	})
+	// Four admitted calls; the rate and repeat refusals are not counted.
+	const trend = await user.meter.readDailyTrend({
+		now: new Date(minuteStart + 62_000).toISOString(),
+	})
+	expect(trend.executeCalls).toEqual([{ day: '2026-10-10', count: 4 }])
 }, 30_000)
 
 test('UserMeter readUsageSnapshot returns daily, weekly, and storage in one call', async () => {

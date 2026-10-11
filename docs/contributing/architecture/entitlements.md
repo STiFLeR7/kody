@@ -8,6 +8,7 @@
 - [UserMeter](#usermeter)
 - [Schema history](#schema-history)
 - [Assigning plans](#assigning-plans)
+- [Admin limit overrides](#admin-limit-overrides)
 - [Plan lookup](#plan-lookup)
 - [The error shape](#the-error-shape)
 - [Counting strategy](#counting-strategy)
@@ -66,7 +67,8 @@ at `packages/worker/universal/plans.ts`.
 
 The plan registry in `plans.ts` includes `free`, `standard`, `pro`, and `max`.
 Every plan has finite numeric limits for every resource; there are no uncapped
-tiers and no env-var backstops.
+tiers and no env-var backstops. Per-org raises are data, not plans: see
+[Admin limit overrides](#admin-limit-overrides).
 
 There is deliberately no uncapped plan; the live registry stays finite `max`
 only.
@@ -433,6 +435,25 @@ observes:
   every call, including warm repeats the plan cap does not, and is a safety net
   rather than a plan limit (busiest production org-minute over the 30 days to
   2026-10-10: 64 calls).
+- **Execute usage in every response**: every signed-in hosted execute response
+  carries `structuredContent.usage`: `unit` (unique execute workers) and `day`
+  (plus `week` when the plan has a weekly window) with `used`, `limit`,
+  `remaining`, and `resetsAt` (next UTC midnight / next UTC Monday). It comes
+  from the worker claim when one ran (repeats included) and from a meter read
+  for calls refused or failed before load, or for runs that crossed UTC
+  midnight. It is best effort: when that meter read fails, the field is omitted
+  and the call still returns.
+- **Execute loop brake**: the same `admitExecuteCall` also refuses a connection
+  that starts the identical call (same code or invoke target and same canonical
+  params) more than `identicalExecuteCallsPerWindow` (20) times in a rolling
+  `identicalExecuteCallWindowMs` (60s) window, with an "Execute loop detected"
+  message that tells the agent it is looping. The repeat key
+  (`executeRepeatKey`) hashes the request credential, acting user, the caller's
+  `conversationId` when it sent one, the code or invoke target, and params. A
+  status poll every 3 seconds stays under it; a back-to-back retry loop trips it
+  within a minute. Refused calls are not recorded, so a looping agent gets at
+  most 20 identical calls through per minute. In memory and bounded to 1,000
+  keys per org, like the runaway brake.
 - **Outbound fetches** are consumed at the top of `executeGatewayFetch`
   (`packages/worker/src/mcp/fetch-gateway.ts`), which every sandbox fetch passes
   through, before secret expansion. `FetchGatewayProps.email` carries the acting
@@ -599,11 +620,16 @@ instead of one RPC per resource:
   (one claim for every resource in that kind's bucket). A `v2` key from a prior
   UTC day claims stock limits only, so a `*_per_day` midnight reset can mail.
   Candidate selection is the top ~80 accounts by current-month event count plus
-  high package/secret stock, capped at 100. Operator crossing events run even
-  when user warning sends fail. The same hourly lane also evaluates the
-  usage-state campaign. Users near stock caps enter `LimitAware` and stay
-  campaign-silent so these entitlement warnings remain the entitlement nudge.
-  See [Usage metering](./usage-metering.md#usage-campaign).
+  high package/secret stock, capped at 100. The hosted execute cap does not wait
+  for the sweep: the worker claim that lands exactly on 80% or 100% of the daily
+  limit (`executeDailyWarningCrossing`) calls `sendEntitlementWarningNow` in
+  `waitUntil`, which mails the org's billing recipients and writes the same
+  instance claim, so the sweep skips it (and the immediate send skips a crossing
+  the sweep already mailed). Operator crossing events run even when user warning
+  sends fail. The same hourly lane also evaluates the usage-state campaign.
+  Users near stock caps enter `LimitAware` and stay campaign-silent so these
+  entitlement warnings remain the entitlement nudge. See
+  [Usage metering](./usage-metering.md#usage-campaign).
 
 `readEntitlementResourceUsage` counts only APP_DB-backed row resources (`repos`,
 `saved_packages`, `secrets`). Resources whose authority is elsewhere
@@ -840,6 +866,90 @@ day.
 Paid upgrades via Stripe write `orgs.stripe_plan` (not `orgs.plan`); see
 [Billing](#billing). Effective entitlement uses the higher-ranked of the two
 when a manual plan is set.
+
+## Admin limit overrides
+
+Admins can raise any daily, weekly, or monthly cap for one org without changing
+its plan. Nothing in code names an org; overrides are data.
+
+**Keys** (`limitOverrideKeys` in `plans.ts`): `execute_unique_workers_per_day`,
+`execute_unique_workers_per_week`, `outbound_fetches_per_day`,
+`outbound_fetches_per_week`, `job_runs_per_day`,
+`automation_invocations_per_day`, `email_sends_per_day`,
+`email_receives_per_day`, `unique_worker_days_per_month`, and
+`durable_object_rows_read_per_month`. Each override is a whole number or
+`'unlimited'` (`unlimitedLimit`, `Number.MAX_SAFE_INTEGER`), an optional
+`expires_at`, a required reason, and the admin who set it.
+
+**Storage:** D1 `org_limit_overrides` (`0103-org-limit-overrides.sql`), primary
+key `(org_id, limit_key)`, `limit_value` NULL for unlimited. It is the only
+source of truth. Expired rows stay for history and are ignored by reads
+(`expires_at > now` in SQL and again in `applyLimitOverrides`).
+
+**One resolution path:** `getUserEntitlement` loads active overrides into
+`UserEntitlement.limitOverrides`. `resolveEntitlementLimits(entitlement)`
+computes the plan limits (ladder, wallet, seat pool, credits ceiling) and then
+applies overrides on top with `applyLimitOverrides`. Every enforcement and
+display path that has an entitlement resolves through `resolveEntitlementLimit`
+/ `resolveWeeklyEntitlementLimit`; the `resolvePlan*` helpers only answer "what
+does this plan give" (admin comparisons, credits marketing, billing includes).
+
+- An override only raises. The enforced value is `max(plan limit, override)`, so
+  a later plan upgrade past the override still wins and an override can never
+  lower a cap.
+- A weekly key does nothing where the plan has no weekly window (legacy ladders,
+  `max`); overrides never add a window.
+- The fail-closed public Free fallback (unknown org, mismatched email/stable-id
+  pair) never carries overrides.
+
+**Cache and freshness:** the 60-second per-isolate entitlement cache cannot be
+invalidated across isolates. The write path drops the writing isolate's entries
+(`invalidateCachedUserEntitlement`), and every counted check for an overridable
+resource (`assertWithinEntitlement`, `consumeDailyEntitlement`,
+`consumeExecuteUniqueWorkerDay`, and the $0 compute stop) reads the org's
+overrides live from D1 in parallel with the cached entitlement. So a change
+binds on the next counted check everywhere, with no TTL that can hide it.
+
+**Admin surfaces** (all `requiredRole: 'admin'`):
+
+- `adminOrgLimitsGet` — plan, effective limit, and override per key for one org,
+  addressed by `orgId` or `org` handle (`@kody` or `kody`).
+- `adminOrgLimitOverridesSet` — set, change, or remove (`value: null`) any
+  number of keys with one reason. Unchanged keys are skipped.
+- `GET` / `POST /admin/orgs/limits.json` and the "Limit overrides" panel on
+  `/admin/users` (personal orgs).
+
+Every set, change, or remove writes an org audit event (`limit_override.set` /
+`.changed` / `.removed`, `resource_type` `limit_override`, `resource_id` the
+key) with the acting admin, `previous` and `next` (`value`, `expiresAt`,
+`reason`, `setByUserId`), and the reason.
+
+**What users see:** the usage page, email usage, admin consumption views, and
+execute `entitlement` metadata (`limit`, `remaining`) report the effective
+limit. `'unlimited'` displays as "Unlimited". Nothing user-facing mentions that
+an override exists.
+
+**Credits and billing are unchanged.** Overrides change caps, never prices:
+
+- **Daily and weekly keys** raise the rate cap only. A purchasable-Pro org with
+  `creditWallet: 'empty'` is still stopped past a monthly compute include
+  (`ComputeOverageLimitError`) even when its daily cap is raised; raising
+  `job_runs_per_day` does not let a $0 wallet spend past the include.
+- **Monthly keys** (`unique_worker_days_per_month`,
+  `durable_object_rows_read_per_month`) move only the $0 stop threshold in
+  `resolvePastIncludeStop`. Debits still use the plan include
+  (`computeMonthlyOverageForDebit`), so:
+  - With a funded wallet, every unit past the plan include is debited exactly as
+    without an override.
+  - With an empty wallet, usage between the plan include and the override runs
+    without the stop. The debit sweep never charges an empty wallet: it advances
+    progress, and a later top-up does not charge that stretch (the existing
+    "stopped then resumed" forgiveness). Set a monthly override only for orgs
+    that should run past the include at $0.
+  - For an empty wallet, the usage page include, the credits alarm, and the
+    entitlement-warning emails all compare against the same stop threshold
+    (`resolvePastIncludeStopLimits`), so none of them reports runs as stopped
+    while the override still admits them.
 
 ## Plan lookup
 

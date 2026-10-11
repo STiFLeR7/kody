@@ -8,15 +8,15 @@ import { type JobsStore } from '@kody-internal/shared/jobs/store.ts'
 import { resolvePastIncludeStop } from '#universal/compute-overage.ts'
 import {
 	isCreditsUnlockedResource,
+	isLimitOverrideResource,
 	isPastIncludeStopResource,
-	isWeeklyComputeWindowResource,
 	parseEntitlementLadder,
 	parseStoredPlanName,
 	parseStripePlanName,
 	resolveCreditWalletState,
 	resolveEffectivePlan,
-	resolvePlanLimit,
-	resolveWeeklyPlanLimit,
+	resolveEntitlementLimit,
+	resolveWeeklyEntitlementLimit,
 	type EntitlementResource,
 	type PlanName,
 	type UserEntitlement,
@@ -46,6 +46,7 @@ import {
 	orgBudgetFromGateContext,
 	type OrgBudgetGateContext,
 } from './budget-gate.ts'
+import { readActiveOrgLimitOverrides } from './limit-overrides.ts'
 import {
 	isDailyEntitlementResource,
 	type DailyEntitlementResource,
@@ -209,19 +210,19 @@ export async function resolveBaseUserEntitlement(input: {
 	)
 	const creditsEligible =
 		plan === 'pro' && hasStoredCreditsEligibility(input.row)
+	const [balanceMicroUsd, limitOverrides] = await Promise.all([
+		creditsEligible
+			? readCreditWalletBalanceMicroUsd(input.db, input.stableUserId)
+			: null,
+		readActiveOrgLimitOverrides(input.db, input.stableUserId),
+	])
 	return {
 		plan,
 		ladder: parseEntitlementLadder(input.row.entitlement_ladder),
 		creditWallet: creditsEligible
-			? resolveCreditWalletState({
-					plan,
-					creditsEligible,
-					balanceMicroUsd: await readCreditWalletBalanceMicroUsd(
-						input.db,
-						input.stableUserId,
-					),
-				})
+			? resolveCreditWalletState({ plan, creditsEligible, balanceMicroUsd })
 			: 'none',
+		limitOverrides,
 	}
 }
 
@@ -244,13 +245,23 @@ export async function resolveUserEntitlementFromRow(input: {
 		input.now,
 	)
 	if (!creditsEligible) {
-		return { plan, ladder, creditWallet: 'none' }
+		return {
+			plan,
+			ladder,
+			creditWallet: 'none',
+			limitOverrides: await readActiveOrgLimitOverrides(
+				input.db,
+				input.stableUserId,
+				input.now,
+			),
+		}
 	}
-	const [balanceMicroUsd, seats] = await Promise.all([
+	const [balanceMicroUsd, seats, limitOverrides] = await Promise.all([
 		input.balanceMicroUsd !== undefined
 			? input.balanceMicroUsd
 			: readCreditWalletBalanceMicroUsd(input.db, input.stableUserId),
 		readPaidSeats(input.db, input.stableUserId),
+		readActiveOrgLimitOverrides(input.db, input.stableUserId, input.now),
 	])
 	return {
 		plan,
@@ -261,6 +272,7 @@ export async function resolveUserEntitlementFromRow(input: {
 			balanceMicroUsd,
 		}),
 		seats,
+		limitOverrides,
 	}
 }
 
@@ -270,6 +282,29 @@ export async function resolveUserEntitlementFromRow(input: {
  */
 async function readPaidSeats(db: D1Database, orgId: string): Promise<number> {
 	return Math.max(1, await countLiveSeats(db, orgId))
+}
+
+/**
+ * The rate pool is seats × the per-seat include, so seats are read live for
+ * pooled resources: a removed seat shrinks the pool on the next check, not
+ * after the entitlement cache.
+ */
+async function withLiveSeats(input: {
+	db: D1Database
+	orgId: string
+	entitlement: UserEntitlement
+	resource: EntitlementResource
+}): Promise<UserEntitlement> {
+	if (
+		input.entitlement.creditWallet === 'none' ||
+		!isCreditsUnlockedResource(input.resource)
+	) {
+		return input.entitlement
+	}
+	return {
+		...input.entitlement,
+		seats: await readPaidSeats(input.db, input.orgId),
+	}
 }
 
 /**
@@ -416,6 +451,13 @@ function createEntitlementLookupCache<T>() {
 			})
 			return await value
 		},
+		deleteByKeyPrefix(db: D1Database, keyPrefix: string) {
+			const cache = cachesByDb.get(db)
+			if (!cache) return
+			for (const key of [...cache.keys()]) {
+				if (key.startsWith(keyPrefix)) cache.delete(key)
+			}
+		},
 	}
 }
 
@@ -441,6 +483,46 @@ export async function getCachedUserEntitlement(
 		`${input.userId}\n${email ?? ''}`,
 		async () => await getUserEntitlement(db, input),
 	)
+}
+
+/**
+ * Drop this isolate's cached entitlements for an org so the next lookup
+ * re-reads D1. Other isolates cannot be reached, which is why counted
+ * checks also read limit overrides live ({@link withLiveLimitOverrides}).
+ */
+export function invalidateCachedUserEntitlement(
+	db: D1Database,
+	orgId: string,
+): void {
+	cachedUserEntitlements.deleteByKeyPrefix(db, `${orgId}\n`)
+}
+
+/**
+ * Replace the (possibly cached) overrides with a live D1 read when the
+ * resource has an overridable limit. The per-isolate entitlement cache can
+ * only be invalidated in the isolate that wrote, so an override change must
+ * not wait out the cache TTL anywhere else.
+ */
+async function withLiveLimitOverrides(input: {
+	db: D1Database
+	orgId: string
+	entitlement: Promise<UserEntitlement>
+	resource: EntitlementResource
+	now: Date
+}): Promise<UserEntitlement> {
+	if (!isLimitOverrideResource(input.resource)) {
+		return await input.entitlement
+	}
+	const [entitlement, limitOverrides] = await Promise.all([
+		input.entitlement,
+		stableUserIdPattern.test(input.orgId)
+			? readActiveOrgLimitOverrides(input.db, input.orgId, input.now)
+			: [],
+	])
+	// The fail-closed public Free fallback (unknown org or mismatched
+	// caller) carries no overrides and must not gain any here.
+	if (entitlement.limitOverrides === undefined) return entitlement
+	return { ...entitlement, limitOverrides }
 }
 
 /**
@@ -1345,12 +1427,7 @@ export async function assertWithinStorageBytesEntitlement(input: {
 		email: input.email,
 	})
 	const plan = entitlement.plan
-	const limit = resolvePlanLimit(
-		plan,
-		'storage_bytes',
-		entitlement.ladder,
-		entitlement.creditWallet,
-	)
+	const limit = resolveEntitlementLimit(entitlement, 'storage_bytes')
 	const requested = Math.max(0, input.requested ?? 1)
 	const updatedAt = new Date().toISOString()
 
@@ -1444,21 +1521,21 @@ export type AssertWithinEntitlementInput = {
 export async function assertWithinEntitlement(
 	input: AssertWithinEntitlementInput,
 ): Promise<void> {
+	const now = input.now ?? new Date()
 	// Cached plan resolution: quota limit lookup tolerates short-TTL
 	// staleness; usage counters below stay fresh on every call.
-	const entitlement = await getCachedUserEntitlement(input.db, {
-		userId: input.userId,
-		email: input.email,
+	const entitlement = await withLiveLimitOverrides({
+		db: input.db,
+		orgId: input.userId,
+		entitlement: getCachedUserEntitlement(input.db, {
+			userId: input.userId,
+			email: input.email,
+		}),
+		resource: input.resource,
+		now,
 	})
 	const plan = entitlement.plan
-	const limit = resolvePlanLimit(
-		plan,
-		input.resource,
-		entitlement.ladder,
-		entitlement.creditWallet,
-		entitlement.seats,
-	)
-	const now = input.now ?? new Date()
+	const limit = resolveEntitlementLimit(entitlement, input.resource, now)
 	const requested = input.requested ?? 1
 	const current = input.getCurrent
 		? await input.getCurrent()
@@ -1532,13 +1609,65 @@ export async function consumeDailyEntitlement(
 	}
 }
 
-export type ExecuteUniqueWorkerDayUsage = {
-	/** True when this call loads a new worker today and spent one unit. */
-	created: boolean
+export type ExecuteUniqueWorkerUsage = {
 	used: number
 	limit: number
 	weekUsed: number | null
 	weekLimit: number | null
+}
+
+export type ExecuteUniqueWorkerDayUsage = ExecuteUniqueWorkerUsage & {
+	/** True when this call loads a new worker today and spent one unit. */
+	created: boolean
+}
+
+/**
+ * Current hosted execute usage without spending, for execute responses that
+ * never reached the worker claim (refused or failed before load).
+ */
+export async function readExecuteUniqueWorkerUsage(input: {
+	db: D1Database
+	env: UserMeterEnv
+	userId: OwnerId
+	email: string | null | undefined
+	now?: Date
+}): Promise<ExecuteUniqueWorkerUsage> {
+	const resource = executeUniqueWorkersResource
+	const now = input.now ?? new Date()
+	const entitlement = await withLiveSeats({
+		db: input.db,
+		orgId: input.userId,
+		entitlement: await withLiveLimitOverrides({
+			db: input.db,
+			orgId: input.userId,
+			entitlement: getCachedUserEntitlement(input.db, {
+				userId: input.userId,
+				email: input.email,
+			}),
+			resource,
+			now,
+		}),
+		resource,
+	})
+	const limit = resolveEntitlementLimit(entitlement, resource, now)
+	const weekLimit = resolveWeeklyEntitlementLimit(entitlement, resource, now)
+	const [used, weekUsed] = await Promise.all([
+		readDailyEntitlementResourceUsage({
+			env: input.env,
+			userId: input.userId,
+			resource,
+			now,
+		}),
+		weekLimit === null
+			? null
+			: readWeeklyEntitlementResourceUsage({
+					env: input.env,
+					userId: input.userId,
+					resource,
+					now,
+				}),
+	])
+	return { used, limit, weekUsed, weekLimit }
 }
 
 const executeUniqueWorkersResource =
@@ -1610,10 +1739,16 @@ async function resolveDailyEntitlementWindow(input: {
 	const now = input.now ?? new Date()
 	// Cached plan resolution: this runs on every new execute worker and every
 	// sandbox outbound fetch; the UserMeter call after it is the only
-	// counter state that must be fresh.
-	const cachedEntitlement = await getCachedUserEntitlement(input.db, {
-		userId: input.userId,
-		email: input.email,
+	// counter state that must be fresh. Overrides are read live in parallel.
+	const cachedEntitlement = await withLiveLimitOverrides({
+		db: input.db,
+		orgId: input.userId,
+		entitlement: getCachedUserEntitlement(input.db, {
+			userId: input.userId,
+			email: input.email,
+		}),
+		resource,
+		now,
 	})
 	// Before the counter so a stopped attempt does not spend daily quota.
 	const checkedEntitlement = isPastIncludeStopResource(resource)
@@ -1626,32 +1761,14 @@ async function resolveDailyEntitlementWindow(input: {
 				orgBudget: input.orgBudget,
 			})
 		: cachedEntitlement
-	// The pool is seats × the per-seat include, so seats are read live: a
-	// removed seat shrinks the pool on the next check, not after the cache.
-	const entitlement =
-		checkedEntitlement.creditWallet !== 'none' &&
-		isCreditsUnlockedResource(resource)
-			? {
-					...checkedEntitlement,
-					seats: await readPaidSeats(input.db, input.userId),
-				}
-			: checkedEntitlement
-	const limit = resolvePlanLimit(
-		entitlement.plan,
+	const entitlement = await withLiveSeats({
+		db: input.db,
+		orgId: input.userId,
+		entitlement: checkedEntitlement,
 		resource,
-		entitlement.ladder,
-		entitlement.creditWallet,
-		entitlement.seats,
-	)
-	const weekLimit = isWeeklyComputeWindowResource(resource)
-		? resolveWeeklyPlanLimit(
-				entitlement.plan,
-				resource,
-				entitlement.ladder,
-				entitlement.creditWallet,
-				entitlement.seats,
-			)
-		: null
+	})
+	const limit = resolveEntitlementLimit(entitlement, resource, now)
+	const weekLimit = resolveWeeklyEntitlementLimit(entitlement, resource, now)
 	return {
 		entitlement,
 		day: utcDayKey(now),
@@ -1766,6 +1883,8 @@ async function assertWithinPastIncludeCredits(input: {
 			ladder: input.entitlement.ladder,
 			creditWallet: input.entitlement.creditWallet,
 			...usage,
+			limitOverrides: input.entitlement.limitOverrides,
+			now: input.now,
 		})
 		if (stop) {
 			const fresh = await getUserEntitlement(input.db, {
@@ -1811,16 +1930,30 @@ export async function assertWithinComputeInclude(input: {
 	now?: Date
 	orgBudget?: OrgBudgetGateContext
 }) {
-	const entitlement = await getCachedUserEntitlement(input.db, {
+	const now = input.now ?? new Date()
+	const cached = await getCachedUserEntitlement(input.db, {
 		userId: input.userId,
 		email: null,
 	})
+	// Only an empty wallet can stop here, so only it pays the live read of
+	// the monthly cap overrides.
+	const entitlement =
+		cached.creditWallet === 'empty' && cached.limitOverrides !== undefined
+			? {
+					...cached,
+					limitOverrides: await readActiveOrgLimitOverrides(
+						input.db,
+						input.userId,
+						now,
+					),
+				}
+			: cached
 	await assertWithinPastIncludeCredits({
 		db: input.db,
 		env: input.env,
 		userId: input.userId,
 		entitlement,
-		now: input.now ?? new Date(),
+		now,
 		orgBudget: input.orgBudget,
 	})
 }

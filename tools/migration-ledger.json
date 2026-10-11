@@ -413,8 +413,12 @@
 			"sha256": "370322c201b9e5592d0f1e05d74331024e716e442dea01eb61971d080475520f"
 		},
 		{
-			"filename": "0103-credential-ids-and-grants.sql",
-			"sha256": "1ea884d5bc9eaba7ea1befb282627e7bc57224d2bf61439ea6b12fc8e152c751"
+			"filename": "0103-org-limit-overrides.sql",
+			"sha256": "859514295b13c7b019566fc4323cb12027168849c8c16b1e4128ebd3249ba181"
+		},
+		{
+			"filename": "0104-credential-ids-and-grants.sql",
+			"sha256": "56d6ce5c01c3840d007e00f70f56e5a3d1cb5194704ef553f388d98d3977e606"
 		}
 	]
 }

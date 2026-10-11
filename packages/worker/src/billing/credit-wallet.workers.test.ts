@@ -14,6 +14,7 @@ import {
 	consumeExecuteUniqueWorkerDay,
 	getUserEntitlement,
 	readDailyEntitlementResourceUsage,
+	readExecuteUniqueWorkerUsage,
 	resolveBaseUserEntitlement,
 } from '#worker/entitlements/service.ts'
 import {
@@ -407,6 +408,15 @@ test('a 3-seat Pro org shares one 1,500/day pool; at $0 it keeps the include and
 	expect(
 		await limitsFor(org, ['execute_unique_workers_per_day', 'saved_packages']),
 	).toEqual([1_500, 10_000])
+	expect(
+		await readExecuteUniqueWorkerUsage({
+			db: env.APP_DB,
+			env,
+			userId: ownerIdFromStored(org.stableUserId),
+			email: org.email,
+			now,
+		}),
+	).toMatchObject({ used: 0, limit: 1_500, weekLimit: 3_600 })
 
 	await consumeTimes(org, 'execute_unique_workers_per_day', 1_500)
 	const denied = await catchError(
@@ -690,6 +700,7 @@ test('plans without a wallet are never stopped past the monthly include, and ret
 		plan: 'pro',
 		ladder: 'public',
 		creditWallet: 'none',
+		limitOverrides: [],
 	})
 	for (const resource of pastIncludeStopped) await consume(gift, resource)
 
@@ -726,6 +737,7 @@ test('gift overlay usage above credits include is not back-charged on resubscrib
 		plan: 'pro',
 		ladder: 'public',
 		creditWallet: 'none',
+		limitOverrides: [],
 	})
 	await setRollup(userId, 600)
 	await debit()
@@ -757,6 +769,7 @@ test('gift overlay with no prior wallet row is not skipped by debit and is not b
 		plan: 'pro',
 		ladder: 'public',
 		creditWallet: 'none',
+		limitOverrides: [],
 	})
 	expect(
 		await env.APP_DB.prepare(
@@ -1307,21 +1320,25 @@ test('base entitlement never pairs an overlay plan with Stripe-only eligibility'
 		plan: 'free',
 		ladder: 'public',
 		creditWallet: 'none',
+		limitOverrides: [],
 	})
 	expect(await base(paying.stableUserId)).toEqual({
 		plan: 'pro',
 		ladder: 'public',
 		creditWallet: 'funded',
+		limitOverrides: [],
 	})
 	expect(await base(retired.stableUserId)).toEqual({
 		plan: 'pro',
 		ladder: 'public',
 		creditWallet: 'none',
+		limitOverrides: [],
 	})
 	// Overlay-aware resolution grants Pro without a wallet (retired ceilings).
 	expect(await entitlementFor(overlay)).toEqual({
 		plan: 'pro',
 		ladder: 'public',
 		creditWallet: 'none',
+		limitOverrides: [],
 	})
 })

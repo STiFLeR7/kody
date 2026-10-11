@@ -26,7 +26,11 @@ import {
 import type * as AccessControlModule from '#mcp/capabilities/access-control.ts'
 import type * as CapabilityRegistryModule from '#mcp/capabilities/registry.ts'
 import type * as RunRecordsServiceModule from '#worker/run-records/service.ts'
-import { executeCallsPerMinutePerOrg } from '#mcp/execute-admission.ts'
+import {
+	executeCallsPerMinutePerOrg,
+	identicalExecuteCallsPerWindow,
+	type ExecuteUsageReport,
+} from '#mcp/execute-admission.ts'
 import { userMeterRpc } from '#worker/entitlements/user-meter-client.ts'
 import { createInMemoryUserMeterEnv } from '#worker/test-support/user-meter.ts'
 import { testStableUserIdFromEmail } from '#worker/test-support/stable-user-id.ts'
@@ -169,6 +173,9 @@ const stubEnv = {
 						async first() {
 							return null
 						},
+						async all() {
+							return { results: [] }
+						},
 					}
 				},
 			}
@@ -227,6 +234,7 @@ type ExecuteResponse = {
 			used?: number
 			remaining?: number
 		}
+		usage?: ExecuteUsageReport
 	}
 	isError: boolean
 }
@@ -1051,6 +1059,23 @@ test('execute tool attaches entitlement metadata on denials and quota, not on su
 		conversationId: 'conv-entitlement-quota',
 	})
 	expect(lastUnit.isError).toBe(false)
+	const quotaWeekLimit = planLimits.free.maxExecuteUniqueWorkersPerWeek!
+	const atLimitUsage = {
+		unit: 'unique execute workers',
+		day: {
+			used: quotaLimit,
+			limit: quotaLimit,
+			remaining: 0,
+			resetsAt: expect.stringMatching(/T00:00:00\.000Z$/),
+		},
+		week: {
+			used: quotaLimit,
+			limit: quotaWeekLimit,
+			remaining: quotaWeekLimit - quotaLimit,
+			resetsAt: expect.stringMatching(/T00:00:00\.000Z$/),
+		},
+	}
+	expect(lastUnit.structuredContent.usage).toEqual(atLimitUsage)
 	runWorker('kody-worker-a')
 	const repeatAtLimit = await quotaHandler({
 		code: okCode,
@@ -1058,6 +1083,7 @@ test('execute tool attaches entitlement metadata on denials and quota, not on su
 		conversationId: 'conv-entitlement-quota',
 	})
 	expect(repeatAtLimit.isError).toBe(false)
+	expect(repeatAtLimit.structuredContent.usage).toEqual(atLimitUsage)
 	runWorker('kody-worker-b')
 	const quotaDenied = await quotaHandler({
 		code: shouldNotRunCode,
@@ -1065,6 +1091,7 @@ test('execute tool attaches entitlement metadata on denials and quota, not on su
 	})
 	expect(sandboxLoads).toEqual(['kody-worker-a', 'kody-worker-a'])
 	expect(quotaDenied.isError).toBe(true)
+	expect(quotaDenied.structuredContent.usage).toEqual(atLimitUsage)
 	const quotaEntitlement = {
 		code: entitlementLimitErrorCode,
 		resource: 'execute_unique_workers_per_day',
@@ -1116,6 +1143,50 @@ test('execute tool refuses past the per-minute runaway limit before any run work
 		new RegExp(
 			`^Execute rate limit: this account started ${executeCallsPerMinutePerOrg} execute calls in the last minute`,
 		),
+	)
+	expect(refused.structuredContent).toMatchObject({
+		admission: { code: 'execute_rate_limited' },
+	})
+})
+
+test('execute tool refuses an identical call loop but still runs changed params', async () => {
+	const email = 'execute-loop@example.com'
+	const userId = testStableUserIdFromEmail(email)
+	vi.useFakeTimers({ toFake: ['Date'] })
+	vi.setSystemTime(Date.parse('2026-10-10T12:00:10.000Z'))
+	onTestFinished(() => {
+		vi.useRealTimers()
+	})
+	const handler = await getExecuteHandler({
+		baseUrl: 'https://example.com',
+		user: { userId, email },
+	})
+	const call = (params: Record<string, unknown>) =>
+		handler({ code: okCode, params, conversationId: 'conv-execute-loop' })
+	mockModule.runModuleWithRegistry.mockResolvedValue({
+		result: { ok: true },
+		logs: [],
+	})
+	for (let index = 0; index < identicalExecuteCallsPerWindow; index += 1) {
+		expect((await call({ id: 1 })).isError).toBeFalsy()
+	}
+	const refused = await call({ id: 1 })
+	expect(refused.isError).toBe(true)
+	expect(refused.structuredContent.error).toMatch(
+		`Execute loop detected: this connection ran the same code with the same params ${identicalExecuteCallsPerWindow} times in the last 60s.`,
+	)
+	expect(refused.structuredContent).toMatchObject({
+		admission: {
+			code: 'execute_loop_detected',
+			retryAfterMs: expect.any(Number),
+		},
+	})
+	expect(mockModule.runModuleWithRegistry).toHaveBeenCalledTimes(
+		identicalExecuteCallsPerWindow,
+	)
+	expect((await call({ id: 2 })).isError).toBeFalsy()
+	expect(mockModule.runModuleWithRegistry).toHaveBeenCalledTimes(
+		identicalExecuteCallsPerWindow + 1,
 	)
 })
 

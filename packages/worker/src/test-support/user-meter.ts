@@ -1,5 +1,11 @@
 import { utcDayKey } from '@kody-internal/shared/date-keys.ts'
 import {
+	admitExecuteCallInWindows,
+	ExecuteRepeatWindow,
+	type ExecuteCallMinuteWindow,
+	type ExecuteRepeatInput,
+} from '#worker/entitlements/execute-admission-windows.ts'
+import {
 	isDailyEntitlementResource,
 	userMeterDailyCounterRetentionDays,
 	userMeterMirrorUpdatedAtToken,
@@ -34,9 +40,9 @@ export function createInMemoryUserMeterEnv() {
 	const deletionByUser = new Map<string, DeletionState>()
 	const dynamicWorkerDaysByUser = new Map<string, Set<string>>()
 	const lastUsedByUser = new Map<string, Map<string, string>>()
-	const executeCallMinuteByUser = new Map<
+	const executeAdmissionByUser = new Map<
 		string,
-		{ minute: number; count: number }
+		{ minuteWindow: ExecuteCallMinuteWindow; repeatWindow: ExecuteRepeatWindow }
 	>()
 	const executeCallDaysByUser = new Map<string, Map<string, number>>()
 	function counterKey(resource: string, day: string) {
@@ -419,23 +425,22 @@ export function createInMemoryUserMeterEnv() {
 				if (result.consumed) dynamicWorkerDays.add(key)
 				return { ...result, created: result.consumed }
 			},
-			async admitExecuteCall(input: { nowMs: number; limitPerMinute: number }) {
-				const minute = Math.floor(input.nowMs / 60_000)
-				const current = executeCallMinuteByUser.get(userId)
-				const window =
-					current?.minute === minute ? current : { minute, count: 0 }
-				executeCallMinuteByUser.set(userId, window)
-				if (window.count >= input.limitPerMinute) {
-					return {
-						admitted: false as const,
-						count: window.count,
-						retryAfterMs: (minute + 1) * 60_000 - input.nowMs,
-					}
+			async admitExecuteCall(input: {
+				nowMs: number
+				limitPerMinute: number
+				repeat?: ExecuteRepeatInput
+			}) {
+				const windows = executeAdmissionByUser.get(userId) ?? {
+					minuteWindow: { minute: 0, count: 0 },
+					repeatWindow: new ExecuteRepeatWindow(),
 				}
-				window.count += 1
-				const day = utcDayKey(new Date(input.nowMs))
-				executeCallDays.set(day, (executeCallDays.get(day) ?? 0) + 1)
-				return { admitted: true as const, count: window.count }
+				executeAdmissionByUser.set(userId, windows)
+				const result = admitExecuteCallInWindows({ ...input, ...windows })
+				if (result.admitted) {
+					const day = utcDayKey(new Date(input.nowMs))
+					executeCallDays.set(day, (executeCallDays.get(day) ?? 0) + 1)
+				}
+				return result
 			},
 			async refund(input: {
 				resource: string

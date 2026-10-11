@@ -1,7 +1,7 @@
 /**
  * Stable credential ids. Every org credential row carries an `id`: secret
  * entries, OAuth integrations, and vault bindings get theirs from the
- * database on insert (migration 0103), and an MCP server's row id is its
+ * database on insert (migration 0104), and an MCP server's row id is its
  * credential id. Grants on credentials are keyed by this id under the one
  * `credential` resource type, so renaming a credential keeps its grants and
  * a deleted then recreated name starts with none.

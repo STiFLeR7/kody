@@ -63,10 +63,20 @@ import {
 	type RawFetchHostNudgeState,
 } from '#mcp/raw-fetch-host-nudge.ts'
 import { isPreRunUsageDenial } from '#worker/entitlements/errors.ts'
-import { getCachedUserEntitlement } from '#worker/entitlements/service.ts'
+import {
+	getCachedUserEntitlement,
+	readExecuteUniqueWorkerUsage,
+} from '#worker/entitlements/service.ts'
 import {
 	admitHostedExecuteCall,
+	buildExecuteUsageReport,
+	claimedUsageForNow,
+	type ClaimedExecuteUsage,
 	createExecuteWorkerDayClaim,
+	executeAdmissionStructuredContent,
+	executeLoopDetectedErrorCode,
+	executeRateLimitedErrorCode,
+	executeRepeatKey,
 } from '#mcp/execute-admission.ts'
 import {
 	abandonRunRecord,
@@ -166,6 +176,21 @@ export const executeToolOutputSchema = {
 		.optional()
 		.describe(
 			'Focused plan-limit or quota fields when a call is denied. Omitted from ordinary successes.',
+		),
+	usage: z
+		.unknown()
+		.optional()
+		.describe(
+			'Hosted execute allowance after this call: unit, and per window (day, plus week when the plan has one) used, limit, remaining, resetsAt. Repeats of code already run today do not count.',
+		),
+	admission: z
+		.object({
+			code: z.enum([executeRateLimitedErrorCode, executeLoopDetectedErrorCode]),
+			retryAfterMs: z.number(),
+		})
+		.optional()
+		.describe(
+			'Set when a runaway or loop brake refused the call before it ran: the refusal code and how long to wait before the same call is admitted.',
 		),
 	logs: z
 		.array(z.unknown())
@@ -284,50 +309,85 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 				...(activeStorageId ? { storageId: activeStorageId } : {}),
 			}
 			let claimedRunHandle: RunRecordHandle | null = null
-			try {
-				return await runExecuteTool()
-			} catch (cause) {
-				// Setup failures (registry build, module bundling, executor
-				// creation) must return a structured MCP error instead of an
-				// unhandled rejection, mirroring the search tool boundary.
-				// Finalize any pre-claimed keyed run so retries can replay the
-				// error instead of seeing a stuck `running` row.
-				// Nested-function assignments are invisible to TS control-flow
-				// analysis on the outer `let`, so reassert the declared type.
-				const claimedHandle = claimedRunHandle as RunRecordHandle | null
-				// Setup failures happen before sandbox work: release the key so
-				// a later retry is not poisoned by a non-sandbox error.
-				if (claimedHandle) {
-					await abandonRunRecord({ env, handle: claimedHandle })
-				}
-				const timing = finishToolTiming(timingStart)
-				const error = cause instanceof Error ? cause : new Error(String(cause))
-				const { errorName, errorMessage } = errorFields(error)
-				const errorDetails = getExecutionErrorDetails(error)
-				logMcpEvent({
-					category: 'mcp',
-					tool: 'execute',
-					toolName: 'execute',
-					outcome: 'failure',
-					durationMs: timing.durationMs,
-					...mcpCallerFields,
-					sandboxError: false,
-					errorName,
-					errorMessage,
-					cause: error,
-				})
+			let claimedExecuteUsage: ClaimedExecuteUsage | null = null
+			return await attachExecuteUsage(await runExecuteToolWithErrorBoundary())
+
+			async function attachExecuteUsage<
+				Response extends { structuredContent: Record<string, unknown> },
+			>(response: Response): Promise<Response> {
+				const ownerId = ownerIdFromCaller(callerContext)
+				if (!callerContext.user?.userId || !ownerId) return response
+				const now = new Date()
+				const usage =
+					claimedUsageForNow(claimedExecuteUsage, now) ??
+					(await readExecuteUniqueWorkerUsage({
+						db: env.APP_DB,
+						env,
+						userId: ownerId,
+						email: entitlementEmailForOwner(callerContext, ownerId),
+						now,
+					}).catch((error: unknown) => {
+						console.warn('execute-usage-read-failed', error)
+						return null
+					}))
+				if (!usage) return response
 				return {
-					content: prependToolMetadataContent(resolvedConversationId, [
-						{ type: 'text', text: `Error: ${error.message}` },
-					]),
+					...response,
 					structuredContent: {
-						conversationId: resolvedConversationId,
-						timing,
-						error: error.message,
-						...(errorDetails ? { errorDetails } : {}),
-						...entitlementStructuredContent(error),
+						...response.structuredContent,
+						usage: buildExecuteUsageReport(usage, now),
 					},
-					isError: true,
+				}
+			}
+
+			async function runExecuteToolWithErrorBoundary() {
+				try {
+					return await runExecuteTool()
+				} catch (cause) {
+					// Setup failures (registry build, module bundling, executor
+					// creation) must return a structured MCP error instead of an
+					// unhandled rejection, mirroring the search tool boundary.
+					// Finalize any pre-claimed keyed run so retries can replay the
+					// error instead of seeing a stuck `running` row.
+					// Nested-function assignments are invisible to TS control-flow
+					// analysis on the outer `let`, so reassert the declared type.
+					const claimedHandle = claimedRunHandle as RunRecordHandle | null
+					// Setup failures happen before sandbox work: release the key so
+					// a later retry is not poisoned by a non-sandbox error.
+					if (claimedHandle) {
+						await abandonRunRecord({ env, handle: claimedHandle })
+					}
+					const timing = finishToolTiming(timingStart)
+					const error =
+						cause instanceof Error ? cause : new Error(String(cause))
+					const { errorName, errorMessage } = errorFields(error)
+					const errorDetails = getExecutionErrorDetails(error)
+					logMcpEvent({
+						category: 'mcp',
+						tool: 'execute',
+						toolName: 'execute',
+						outcome: 'failure',
+						durationMs: timing.durationMs,
+						...mcpCallerFields,
+						sandboxError: false,
+						errorName,
+						errorMessage,
+						cause: error,
+					})
+					return {
+						content: prependToolMetadataContent(resolvedConversationId, [
+							{ type: 'text', text: `Error: ${error.message}` },
+						]),
+						structuredContent: {
+							conversationId: resolvedConversationId,
+							timing,
+							error: error.message,
+							...(errorDetails ? { errorDetails } : {}),
+							...entitlementStructuredContent(error),
+							...executeAdmissionStructuredContent(error),
+						},
+						isError: true,
+					}
 				}
 			}
 
@@ -402,7 +462,7 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 					...executeAttribution,
 				}
 
-				// Runaway brake before claim/bundling/sandbox so a refused call
+				// Runaway and loop brakes before claim/bundling/sandbox so a refused call
 				// costs nothing and does not poison a key. The plan cap counts
 				// unique workers and is spent inside the executor, once the
 				// worker id is known and before that worker loads.
@@ -412,6 +472,10 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 								env,
 								ownerId: storageOwnerId,
 								email: entitlementEmail,
+								onUsage: (claimed) => {
+									claimedExecuteUsage = claimed
+								},
+								waitUntil,
 								orgBudget: callerContext.request
 									? {
 											orgId: callerContext.request.org.id,
@@ -424,7 +488,21 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 							})
 						: undefined
 				if (claimWorkerDay) {
-					await admitHostedExecuteCall({ env, ownerId: storageOwnerId })
+					await admitHostedExecuteCall({
+						env,
+						ownerId: storageOwnerId,
+						repeatKey: await executeRepeatKey({
+							credential: callerContext.request?.credential ?? null,
+							actorUserId:
+								callerContext.request?.actor?.userId ??
+								callerContext.user?.userId ??
+								null,
+							conversationId,
+							code,
+							invoke,
+							params,
+						}),
+					})
 				}
 
 				if (normalizedIdempotencyKey && storageOwnerId) {
