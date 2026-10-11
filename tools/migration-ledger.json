@@ -417,8 +417,12 @@
 			"sha256": "859514295b13c7b019566fc4323cb12027168849c8c16b1e4128ebd3249ba181"
 		},
 		{
-			"filename": "0104-credential-ids-and-grants.sql",
-			"sha256": "56d6ce5c01c3840d007e00f70f56e5a3d1cb5194704ef553f388d98d3977e606"
+			"filename": "0104-integration-token-refresh-lease.sql",
+			"sha256": "59d142b21ded2b22006ee16797e7db3dbdb8d832a68aa0b39b4d47cd0bba466b"
+		},
+		{
+			"filename": "0105-credential-ids-and-grants.sql",
+			"sha256": "654863a2308b9045d38b364ab226586f584c8e3a1a3a6584f140e2f2af45f9d6"
 		}
 	]
 }

@@ -86,7 +86,7 @@ BEGIN
 END;
 
 INSERT INTO __migration_assertions (message)
-SELECT 'a credential row has no id after the 0104 backfill; aborting.'
+SELECT 'a credential row has no id after the 0105 backfill; aborting.'
 WHERE EXISTS (SELECT 1 FROM secret_entries WHERE id IS NULL)
 	OR EXISTS (SELECT 1 FROM user_integrations WHERE id IS NULL)
 	OR EXISTS (SELECT 1 FROM secret_provider_bindings WHERE id IS NULL)
@@ -145,7 +145,7 @@ JOIN mcp_server_settings s ON s.user_id = i.org_id AND s.name = i.resource_id
 WHERE i.kind = 'grant' AND i.resource_type = 'integration';
 
 INSERT INTO __migration_assertions (message)
-SELECT 'name-keyed credential grant ' || g.id || ' maps to no credential; aborting 0104.'
+SELECT 'name-keyed credential grant ' || g.id || ' maps to no credential; aborting 0105.'
 FROM grants g
 WHERE g.resource_type IN ('secret', 'integration')
 	AND NOT EXISTS (
@@ -154,7 +154,7 @@ WHERE g.resource_type IN ('secret', 'integration')
 	);
 
 INSERT INTO __migration_assertions (message)
-SELECT 'name-keyed credential invite ' || i.id || ' maps to no credential; aborting 0104.'
+SELECT 'name-keyed credential invite ' || i.id || ' maps to no credential; aborting 0105.'
 FROM invites i
 WHERE i.kind = 'grant' AND i.resource_type IN ('secret', 'integration')
 	AND NOT EXISTS (
@@ -164,20 +164,20 @@ WHERE i.kind = 'grant' AND i.resource_type IN ('secret', 'integration')
 
 INSERT INTO __migration_assertions (message)
 SELECT 'name-keyed credential ' || source || ' ' || source_id
-	|| ' maps to more than one credential; aborting 0104.'
+	|| ' maps to more than one credential; aborting 0105.'
 FROM __credential_name_candidates
 GROUP BY source, source_id
 HAVING COUNT(*) > 1;
 
 INSERT INTO __migration_assertions (message)
-SELECT 'name-keyed secret grant ' || g.id || ' names a vault door key; aborting 0104.'
+SELECT 'name-keyed secret grant ' || g.id || ' names a vault door key; aborting 0105.'
 FROM grants g
 JOIN secret_provider_bindings p
 	ON p.user_id = g.org_id AND p.door_secret_name = g.resource_id
 WHERE g.resource_type = 'secret';
 
 INSERT INTO __migration_assertions (message)
-SELECT 'name-keyed secret invite ' || i.id || ' names a vault door key; aborting 0104.'
+SELECT 'name-keyed secret invite ' || i.id || ' names a vault door key; aborting 0105.'
 FROM invites i
 JOIN secret_provider_bindings p
 	ON p.user_id = i.org_id AND p.door_secret_name = i.resource_id
@@ -187,7 +187,7 @@ WHERE i.kind = 'grant' AND i.resource_type = 'secret';
 -- same name, so the name grant covered that secret too.
 INSERT INTO __migration_assertions (message)
 SELECT 'name-keyed secret grant ' || g.id
-	|| ' also covers a package or session secret; aborting 0104.'
+	|| ' also covers a package or session secret; aborting 0105.'
 FROM grants g
 WHERE g.resource_type = 'secret'
 	AND EXISTS (
@@ -199,7 +199,7 @@ WHERE g.resource_type = 'secret'
 
 INSERT INTO __migration_assertions (message)
 SELECT 'name-keyed secret invite ' || i.id
-	|| ' also covers a package or session secret; aborting 0104.'
+	|| ' also covers a package or session secret; aborting 0105.'
 FROM invites i
 WHERE i.kind = 'grant' AND i.resource_type = 'secret'
 	AND EXISTS (
@@ -310,7 +310,7 @@ SELECT 'after',
 		WHERE kind = 'grant' AND resource_type = 'credential');
 
 INSERT INTO __migration_assertions (message)
-SELECT 'grant counts changed in 0104; aborting.'
+SELECT 'grant counts changed in 0105; aborting.'
 FROM __credential_grant_counts before_counts
 JOIN __credential_grant_counts after_counts
 	ON before_counts.phase = 'before' AND after_counts.phase = 'after'
@@ -322,7 +322,7 @@ WHERE before_counts.grants != after_counts.grants
 	OR before_counts.credential_invites != after_counts.credential_invites;
 
 INSERT INTO __migration_assertions (message)
-SELECT 'a name-keyed credential grant or invite remains after 0104; aborting.'
+SELECT 'a name-keyed credential grant or invite remains after 0105; aborting.'
 WHERE EXISTS (
 	SELECT 1 FROM grants WHERE resource_type IN ('secret', 'integration')
 ) OR EXISTS (
