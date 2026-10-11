@@ -418,9 +418,14 @@ const oauthProvidersByResource = new Map<string, OAuthProvider>()
 
 const mcpApiHandler = {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		// MEASUREMENT ONLY (#3338 stage B5): route this request's APP_DB
+		// through a D1 session so reads may be served by a read replica.
+		const appDb = env.APP_DB.withSession(
+			'first-unconstrained',
+		) as unknown as D1Database
 		return handleMcpRequest({
 			request,
-			env,
+			env: { ...env, APP_DB: appDb },
 			ctx,
 			fetchMcp: (mcpRequest, mcpEnv, mcpContext) =>
 				loadLegacyMcpFetch().then((fetchLegacy) =>

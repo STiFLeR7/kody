@@ -5,6 +5,7 @@ import path from 'node:path'
 import { defaultProductionEntryPath } from '../check-origin-production-exports.ts'
 import { isExecutedDirectly } from '../node-runtime.ts'
 import {
+	cloudflareApiRequest,
 	inspectOriginProductionScriptState,
 	planOriginPreviewDeploy,
 	previewFleetScriptNames,
@@ -656,6 +657,18 @@ async function ensurePreviewResources(options: CliOptions) {
 		namespace: artifactsNamespace,
 	})
 	await ensureVectorizeIndex({ ...queueClient, name: vectorizeIndexName })
+	// MEASUREMENT ONLY (#3338 stage B5): D1 read replication on the preview
+	// APP_DB. Reads go through `withSession()` in the MCP lane
+	// (packages/worker/src/origin-handler.ts).
+	if (!options.dryRun) {
+		await cloudflareApiRequest({
+			...queueClient,
+			pathname: `/d1/database/${d1.id}`,
+			method: 'PUT',
+			body: { read_replication: { mode: 'auto' } },
+		})
+		console.error(`D1 read replication enabled: ${d1.name} (${d1.id})`)
+	}
 
 	// Same classifier as production (tools/ci/production-resources.ts), run
 	// against this preview's three script names. A dry run has no live fleet
