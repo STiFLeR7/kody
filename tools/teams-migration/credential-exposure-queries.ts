@@ -156,8 +156,6 @@ export type CredentialGrantIdReport = {
 	nameKeyedGrants: {
 		count: number
 		byOutcome: Partial<Record<NameKeyedOutcome, number>>
-		/** Old name grants that also covered a same-name package/session secret. */
-		alsoCoveredScopedSecret: number
 		rows: Array<Record<string, unknown> & { outcome: NameKeyedOutcome }>
 	}
 	nameKeyedInvites: {
@@ -220,11 +218,6 @@ export async function runCredentialGrantIdQueries(input: {
 		nameKeyedGrants: {
 			count: nameKeyedGrants.length,
 			byOutcome: countBy(nameKeyedGrants, (row) => row.outcome),
-			alsoCoveredScopedSecret: nameKeyedGrants.filter(
-				(row) =>
-					row.resource_type === 'secret' &&
-					Number(row.scoped_secret_matches) > 0,
-			).length,
 			rows: nameKeyedGrants,
 		},
 		nameKeyedInvites: {

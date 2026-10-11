@@ -118,12 +118,16 @@ type CandidateCounts = {
  * - `shared-with-vault`: the secret is also a vault door key, so the old
  *   name grant covered vault use too (fails the migration: one grant cannot
  *   become two ids without changing who can use what).
+ * - `also-scoped`: a package or session secret in the org shares the name,
+ *   and resolution prefers it in that storage context, so the old name grant
+ *   covered it too (fails the migration for the same reason).
  */
 export type NameKeyedOutcome =
 	| 'mapped'
 	| 'orphan'
 	| 'ambiguous'
 	| 'shared-with-vault'
+	| 'also-scoped'
 
 export function classifyNameKeyedCredential(
 	resourceType: string,
@@ -135,6 +139,7 @@ export function classifyNameKeyedCredential(
 			if (matches === 0) return 'orphan'
 			if (matches > 1) return 'ambiguous'
 			if (Number(counts.vault_door_matches) > 0) return 'shared-with-vault'
+			if (Number(counts.scoped_secret_matches) > 0) return 'also-scoped'
 			return 'mapped'
 		}
 		case 'integration': {

@@ -36,10 +36,11 @@ function migratedDb() {
 		.prepare(
 			`INSERT INTO secret_entries (bucket_id, name, encrypted_value, created_at, updated_at)
 			 VALUES ('bucket-org', 'api-key', 'x', ?, ?),
+			        ('bucket-org', 'org-only', 'x', ?, ?),
 			        ('bucket-org', 'door-key', 'x', ?, ?),
 			        ('bucket-pkg', 'api-key', 'x', ?, ?)`,
 		)
-		.run(now, now, now, now, now, now)
+		.run(now, now, now, now, now, now, now, now)
 	sqlite
 		.prepare(
 			`INSERT INTO saved_packages (id, user_id, name, kody_id, description, source_id, created_at, updated_at)
@@ -66,6 +67,7 @@ function migratedDb() {
 		) VALUES (?, 'org-a', ?, ?, 'user', 'member-id', 'use', 'owner-id', ?, ?, ?)`,
 	)
 	grant.run('g-secret', 'secret', 'api-key', now, now, null)
+	grant.run('g-org-only', 'secret', 'org-only', now, now, null)
 	grant.run('g-door', 'secret', 'door-key', now, now, null)
 	grant.run('g-gone', 'secret', 'deleted-secret', now, now, now)
 	grant.run('g-mcp', 'integration', 'linear', now, now, null)
@@ -73,7 +75,8 @@ function migratedDb() {
 	sqlite
 		.prepare(
 			`INSERT INTO grant_permissions (grant_id, permission)
-			 VALUES ('g-secret', 'secret:use'), ('g-door', 'secret:use'),
+			 VALUES ('g-secret', 'secret:use'), ('g-org-only', 'secret:use'),
+			        ('g-door', 'secret:use'),
 			        ('g-gone', 'secret:use'), ('g-mcp', 'integration:use'),
 			        ('g-mcp', 'integration:read'), ('g-package', 'package:read')`,
 		)
@@ -102,7 +105,8 @@ test('dry-runs the name-to-id mapping for every name-keyed grant and invite', ()
 		]),
 	)
 	expect(outcomes).toEqual({
-		'g-secret': 'mapped',
+		'g-secret': 'also-scoped',
+		'g-org-only': 'mapped',
 		'g-door': 'shared-with-vault',
 		'g-gone': 'orphan',
 		'g-mcp': 'mapped',
@@ -148,7 +152,7 @@ test('dry-runs the name-to-id mapping for every name-keyed grant and invite', ()
 			grants: 1,
 			permissions: 1,
 		},
-		{ resource_type: 'secret', grant_state: 'live', grants: 2, permissions: 2 },
+		{ resource_type: 'secret', grant_state: 'live', grants: 3, permissions: 3 },
 	])
 	expect(sqlite.prepare(grantInviteTotalsSql).all()).toEqual([
 		{ resource_type: 'integration', status: 'pending', invites: 1 },

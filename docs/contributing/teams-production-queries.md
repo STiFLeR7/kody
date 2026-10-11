@@ -83,10 +83,11 @@ means the §7.2 seat mapping does not cover it yet.
 
 `credentialGrantIds` is the before/after evidence for the stable credential id
 migration. Each name-keyed row has an `outcome`: `mapped`, `orphan` (no
-credential carries the name), `ambiguous` (an integration and an MCP server
-share it), or `shared-with-vault` (the secret is also a vault door key, so the
-name grant covered vault use too). The migration aborts on anything but
-`mapped`.
+credential carries the name), `ambiguous` (more than one credential row carries
+the name), `shared-with-vault` (the secret is also a vault door key, so the name
+grant covered vault use too), or `also-scoped` (a package or session secret in
+the org shares the name, so the name grant covered it too). The migration aborts
+on anything but `mapped`.
 
 Ambient placeholder expansion did not write `org_audit_events` historically, so
 the audit section is a capability-surface check when rows exist. MCP servers
