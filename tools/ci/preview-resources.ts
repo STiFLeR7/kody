@@ -5,7 +5,6 @@ import path from 'node:path'
 import { defaultProductionEntryPath } from '../check-origin-production-exports.ts'
 import { isExecutedDirectly } from '../node-runtime.ts'
 import {
-	cloudflareApiRequest,
 	inspectOriginProductionScriptState,
 	planOriginPreviewDeploy,
 	previewFleetScriptNames,
@@ -33,6 +32,7 @@ import {
 	runWranglerWithRetry,
 	truncateWithSuffix,
 	writeGeneratedWranglerConfig,
+	cloudflareApiRequest,
 } from './resource-utils.ts'
 import {
 	deleteVectorizeIndex,
