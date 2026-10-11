@@ -107,12 +107,15 @@ const integrationIdentityModule = (echoUrl: string) =>
  * Every rehearsal user has a secret and an integration with the same names,
  * so each proof must match the owner's own hash taken alongside it: a grant
  * that stops working, or resolves to another user's credential, throws.
- * Integration tokens refresh hourly, so only the match is returned.
+ * Integration tokens refresh hourly, so only the match is returned. The seed
+ * also passes the owner's seeded secret hash; the snapshot diffs the owner's
+ * own secret proof instead.
  */
 export async function credentialGranteeProofs(input: {
 	grantee: RehearsalSession
 	owner: RehearsalSession
 	echoUrl: string
+	ownerSecretSha256?: string | null
 }) {
 	const run = async (session: RehearsalSession, code: string, label: string) =>
 		readRecord(await session.execute(code), label)
@@ -139,7 +142,9 @@ export async function credentialGranteeProofs(input: {
 	const proofs = {
 		secretMatchesOwner:
 			typeof ownerSecret.sha256 === 'string' &&
-			secret.sha256 === ownerSecret.sha256,
+			secret.sha256 === ownerSecret.sha256 &&
+			(input.ownerSecretSha256 === undefined ||
+				ownerSecret.sha256 === input.ownerSecretSha256),
 		integrationMatchesOwner:
 			typeof ownerIntegration.authorizationSha256 === 'string' &&
 			integration.authorizationSha256 === ownerIntegration.authorizationSha256,
@@ -837,6 +842,7 @@ export async function seedRehearsal(
 			grantee: carolInAliceOrg,
 			owner: alice,
 			echoUrl: `${input.origins.mockCloudflare}/__mocks/rehearsal/echo`,
+			ownerSecretSha256: alicePackage?.userSecretSha256 ?? null,
 		})
 		const pending = await callCapability(carolSession, 'inviteCreate', {
 			kind: 'grant',
