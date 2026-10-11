@@ -628,6 +628,8 @@
 			},
 		},
 		"preview": {
+			// MEASUREMENT ONLY (#3338 stage B4): Smart Placement on the preview origin.
+			"placement": { "mode": "smart" },
 			// Deployed preview origins upload the slim entry and own no Durable
 			// Object class, so `tools/ci/preview-resources.ts` strips this block
 			// from the generated deploy config. It only replays for the full
