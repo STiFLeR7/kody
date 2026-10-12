@@ -68,6 +68,16 @@ test('redactErrorAgentPromptText strips bearer, jwt, keys, and query secrets', (
 		),
 	).toContain('access_token=[REDACTED]')
 	expect(
+		redactErrorAgentPromptText(
+			'Authorization: Bearer abc+def/ghi=padded-token-value',
+		),
+	).toContain('Bearer [REDACTED]')
+	expect(
+		redactErrorAgentPromptText(
+			'Authorization: Bearer abc+def/ghi=padded-token-value',
+		),
+	).not.toContain('abc def')
+	expect(
 		redactErrorAgentPromptText('password: hunter2-extra-long-value'),
 	).toContain('password: [REDACTED]')
 	expect(

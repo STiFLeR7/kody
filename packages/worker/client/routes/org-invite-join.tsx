@@ -149,8 +149,14 @@ export function OrgInviteJoinRoute(handle: Handle) {
 			} satisfies OrgInviteJoinLoaderData)
 
 		if (!data.ok) {
+			const loadErrorMessage =
+				snapshot.kind === 'error'
+					? (snapshot.error?.message ?? 'Unable to load this invite link.')
+					: null
 			const resolvedFailure =
-				snapshot.data != null && snapshot.data.ok === false
+				(snapshot.data != null && snapshot.data.ok === false) ||
+				loadErrorMessage != null
+			const failureMessage = loadErrorMessage ?? data.error
 			return (
 				<section mix={css(pageCss)}>
 					<header mix={css(pageHeaderCss)}>
@@ -165,13 +171,13 @@ export function OrgInviteJoinRoute(handle: Handle) {
 						{resolvedFailure ? (
 							<>
 								<p role="alert" mix={css(bodyCss)}>
-									{data.error}
+									{failureMessage}
 								</p>
 								<ErrorAgentPromptButton
 									prompt={buildErrorAgentPrompt({
 										activity: 'Opening an organization invite link.',
 										errorCode: 'org_invite_unusable',
-										errorMessage: data.error,
+										errorMessage: failureMessage,
 										ids: { path: '/join' },
 										likelyCause:
 											'The invite expired, was revoked, or the token is invalid.',

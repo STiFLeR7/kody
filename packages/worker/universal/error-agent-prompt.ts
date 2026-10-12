@@ -92,14 +92,8 @@ function redactSecretQueryParams(text: string) {
  * Strip tokens, secrets, and opaque credential-shaped strings from prompt
  * text. Never include secret values, session cookies, or other users’ data.
  */
-export function redactErrorAgentPromptText(text: string) {
+function redactPlainErrorAgentPromptText(text: string) {
 	let next = text
-	try {
-		// Decode once so percent-encoded secret param names/values still redact.
-		next = decodeURIComponent(text.replaceAll('+', ' '))
-	} catch {
-		next = text
-	}
 	next = next.replace(bearerPattern, `Bearer ${REDACTED}`)
 	next = next.replace(jwtPattern, REDACTED)
 	next = next.replace(skStyleKeyPattern, REDACTED)
@@ -107,6 +101,26 @@ export function redactErrorAgentPromptText(text: string) {
 	next = next.replace(longHexPattern, REDACTED)
 	next = next.replace(mixedOpaqueTokenPattern, REDACTED)
 	return next
+}
+
+/**
+ * Strip tokens/secrets from prompt text. Also redacts a percent-decoded copy
+ * so `access_token%3D…` is caught, without turning literal `+` into spaces
+ * (which would corrupt base64-ish tokens).
+ */
+export function redactErrorAgentPromptText(text: string) {
+	const original = redactPlainErrorAgentPromptText(text)
+	let decoded = text
+	try {
+		decoded = decodeURIComponent(text)
+	} catch {
+		return original
+	}
+	if (decoded === text) return original
+	const redactedDecoded = redactPlainErrorAgentPromptText(decoded)
+	const originalHits = original.split(REDACTED).length
+	const decodedHits = redactedDecoded.split(REDACTED).length
+	return decodedHits > originalHits ? redactedDecoded : original
 }
 
 function pushIdLine(
