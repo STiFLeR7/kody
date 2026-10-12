@@ -2,11 +2,9 @@ import { type ConnectOauthExistingConnection } from '#universal/loader-data.ts'
 import { docHref } from '#universal/docs-nav.ts'
 import { css, ref } from 'remix/component'
 import { ErrorAgentPromptButton } from '#client/error-agent-prompt-button.tsx'
-import {
-	buildConnectOauthFailureAgentPrompt,
-	buildIncompleteConnectOauthAgentPrompt,
-} from '#universal/error-agent-prompt-presets.ts'
+import { buildConnectOauthFailureAgentPrompt } from '#universal/error-agent-prompt-presets.ts'
 import { isConnectOauthCallbackUrl } from '#universal/oauth-connect.ts'
+import { buildIncompleteConnectOauthPrompt } from '#universal/oauth-scopes.ts'
 import { on } from '#client/event-mixin.ts'
 import { ProviderMark } from '#client/provider-icons.tsx'
 import { colors, spacing } from '#universal/styles/tokens.ts'
@@ -231,7 +229,7 @@ export function renderIncompleteConfig(provider: string) {
 				token URLs and send you a complete link.
 			</p>
 			<ErrorAgentPromptButton
-				prompt={buildIncompleteConnectOauthAgentPrompt({ provider })}
+				prompt={buildIncompleteConnectOauthPrompt({ provider })}
 				variant="primary"
 			/>
 			<p mix={css(descriptionCss)}>
@@ -279,6 +277,46 @@ export function renderStatusCallout(input: {
 		return <p mix={css(pageDescriptionCss)}>{input.statusMessage}</p>
 	}
 	return null
+}
+
+/** Chooser / incomplete / callback body when no resolved connect config. */
+export function renderConnectOauthNoConfigBody(input: {
+	requestedProvider: string | null
+	hasConfigError: boolean
+	statusTone: ConnectOauthStatusTone
+	statusMessage: string
+	currentStep: ConnectOauthStep
+	currentHref: string
+	chooserOptions: Parameters<typeof renderChooser>[0]['chooserOptions']
+	chooserFilter: string
+	onFilterChange: (value: string) => void
+	onFilterInput: (node: HTMLInputElement | null) => void
+	onFilterDetach: (node: HTMLInputElement | null) => void
+}) {
+	if (input.requestedProvider && input.hasConfigError) {
+		return renderIncompleteConfig(input.requestedProvider)
+	}
+	return (
+		<>
+			{renderStatusCallout({
+				statusTone: input.statusTone,
+				statusMessage: input.statusMessage,
+				currentStep: input.currentStep,
+				provider: input.requestedProvider,
+			})}
+			{isConnectOauthCallbackUrl(
+				new URL(input.currentHref, 'https://kody.local'),
+			) && input.statusTone !== 'error'
+				? renderCallbackPending()
+				: renderChooser({
+						chooserOptions: input.chooserOptions,
+						chooserFilter: input.chooserFilter,
+						onFilterChange: input.onFilterChange,
+						onFilterInput: input.onFilterInput,
+						onFilterDetach: input.onFilterDetach,
+					})}
+		</>
+	)
 }
 
 export function connectOauthHeaderTitle(input: {

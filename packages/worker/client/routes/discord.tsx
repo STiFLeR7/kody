@@ -2,7 +2,6 @@ import { type Handle, css } from 'remix/component'
 import { ErrorAgentPromptButton } from '#client/error-agent-prompt-button.tsx'
 import { on } from '#client/event-mixin.ts'
 import { buildErrorAgentPrompt } from '#universal/error-agent-prompt.ts'
-import { buildOauthLoginErrorAgentPrompt } from '#universal/error-agent-prompt-presets.ts'
 import { readCurrentRouterHref } from '#client/client-router.tsx'
 import {
 	createRouteData,
@@ -74,15 +73,9 @@ function discordErrorAgentPrompt(input: {
 	errorMessage: string
 	oauthErrorCode?: string | null
 }) {
-	if (input.oauthErrorCode) {
-		return buildOauthLoginErrorAgentPrompt({
-			errorCode: input.oauthErrorCode,
-			errorMessage: input.errorMessage,
-		})
-	}
 	return buildErrorAgentPrompt({
 		activity: 'Connecting Discord on /discord.',
-		errorCode: 'discord_error',
+		errorCode: input.oauthErrorCode ?? 'discord_error',
 		errorMessage: input.errorMessage,
 		ids: { path: '/discord', provider: 'discord' },
 		likelyCause:

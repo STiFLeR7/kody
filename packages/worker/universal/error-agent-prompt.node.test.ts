@@ -63,6 +63,11 @@ test('redactErrorAgentPromptText strips bearer, jwt, keys, and query secrets', (
 		),
 	).toContain('code=[REDACTED]')
 	expect(
+		redactErrorAgentPromptText(
+			'https://kody.codes/callback?access_token%3Dsuper-secret-token-value-here',
+		),
+	).toContain('access_token=[REDACTED]')
+	expect(
 		redactErrorAgentPromptText('password: hunter2-extra-long-value'),
 	).toContain('password: [REDACTED]')
 	expect(

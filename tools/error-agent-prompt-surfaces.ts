@@ -94,4 +94,6 @@ export const errorAgentPromptCandidatePatterns = [
 	/(^|\/)internal-error-page\./,
 	/(^|\/)not-found-page\./,
 	/package-app-serve\./,
+	// New dedicated *error-page* modules must be classified in adopt or skip.
+	/(^|\/)[\w-]*error-page\./,
 ] as const

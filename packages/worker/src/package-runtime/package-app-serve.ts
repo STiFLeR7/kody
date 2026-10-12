@@ -394,7 +394,8 @@ function createPackageAppErrorResponse(input: {
 									packageName: input.packageName,
 									kodyId: input.kodyId,
 									path: requestPath,
-									cause: input.cause,
+									// Visitor HTML must not include host exception text;
+									// JSON synthetic responses still carry `cause`.
 									runtimeRunId: input.runtimeRunId,
 								}),
 							)}`}

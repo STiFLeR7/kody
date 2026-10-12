@@ -1,3 +1,4 @@
+import { normalizeProviderKey } from '@kody-internal/shared/url-hosts.ts'
 import {
 	buildErrorAgentPrompt,
 	type ErrorAgentPromptIds,
@@ -188,7 +189,7 @@ export function buildConnectOauthFailureAgentPrompt(input: {
 export function buildIncompleteConnectOauthAgentPrompt(input: {
 	provider: string
 }) {
-	const provider = input.provider.trim() || 'this provider'
+	const provider = normalizeProviderKey(input.provider) || 'this provider'
 	return buildErrorAgentPrompt({
 		activity: `Opened /connect/oauth to connect "${provider}", but the URL is missing authorize and/or token configuration.`,
 		errorCode: 'connect_oauth_incomplete_config',

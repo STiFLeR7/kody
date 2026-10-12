@@ -149,34 +149,46 @@ export function OrgInviteJoinRoute(handle: Handle) {
 			} satisfies OrgInviteJoinLoaderData)
 
 		if (!data.ok) {
+			const resolvedFailure =
+				snapshot.data != null && snapshot.data.ok === false
 			return (
 				<section mix={css(pageCss)}>
 					<header mix={css(pageHeaderCss)}>
 						<h1 mix={css(pageTitleCss)}>Invite link</h1>
 						<p mix={css(pageDescriptionCss)}>
-							This invite link cannot be used.
+							{resolvedFailure
+								? 'This invite link cannot be used.'
+								: 'Loading this invite link…'}
 						</p>
 					</header>
 					<div mix={css(cardCss)}>
-						<p role="alert" mix={css(bodyCss)}>
-							{data.error}
-						</p>
-						<ErrorAgentPromptButton
-							prompt={buildErrorAgentPrompt({
-								activity: 'Opening an organization invite link.',
-								errorCode: 'org_invite_unusable',
-								errorMessage: data.error,
-								ids: { path: '/join' },
-								likelyCause:
-									'The invite expired, was revoked, or the token is invalid.',
-								nextSteps: [
-									'Ask the org owner to send a fresh invite.',
-									'Confirm I am signed in as the invited email.',
-								],
-								kodyTools: ['search({ entity: "guide:organizations" })'],
-								docs: ['search({ entity: "guide:organizations" })'],
-							})}
-						/>
+						{resolvedFailure ? (
+							<>
+								<p role="alert" mix={css(bodyCss)}>
+									{data.error}
+								</p>
+								<ErrorAgentPromptButton
+									prompt={buildErrorAgentPrompt({
+										activity: 'Opening an organization invite link.',
+										errorCode: 'org_invite_unusable',
+										errorMessage: data.error,
+										ids: { path: '/join' },
+										likelyCause:
+											'The invite expired, was revoked, or the token is invalid.',
+										nextSteps: [
+											'Ask the org owner to send a fresh invite.',
+											'Confirm I am signed in as the invited email.',
+										],
+										kodyTools: ['search({ entity: "guide:organizations" })'],
+										docs: ['search({ entity: "guide:organizations" })'],
+									})}
+								/>
+							</>
+						) : (
+							<p role="status" mix={css(bodyCss)}>
+								Loading…
+							</p>
+						)}
 						<p mix={css(footerCss)}>
 							<a href="/" mix={css(mutedLinkCss)}>
 								Go home

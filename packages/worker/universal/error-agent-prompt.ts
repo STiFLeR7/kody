@@ -94,6 +94,12 @@ function redactSecretQueryParams(text: string) {
  */
 export function redactErrorAgentPromptText(text: string) {
 	let next = text
+	try {
+		// Decode once so percent-encoded secret param names/values still redact.
+		next = decodeURIComponent(text.replaceAll('+', ' '))
+	} catch {
+		next = text
+	}
 	next = next.replace(bearerPattern, `Bearer ${REDACTED}`)
 	next = next.replace(jwtPattern, REDACTED)
 	next = next.replace(skStyleKeyPattern, REDACTED)
