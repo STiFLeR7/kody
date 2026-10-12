@@ -96,7 +96,7 @@ export function renderReplaceConfirmation(input: {
 	)
 }
 
-export function renderCallbackPending() {
+function renderCallbackPending() {
 	return (
 		<section mix={css(cardCss)} data-testid="connect-oauth-callback">
 			<p mix={css({ margin: 0, color: colors.text })}>
@@ -217,7 +217,7 @@ export function renderChooser(input: {
 	)
 }
 
-export function renderIncompleteConfig(provider: string) {
+function renderIncompleteConfig(provider: string) {
 	return (
 		<section mix={css(cardCss)} data-testid="connect-oauth-incomplete">
 			<p mix={css({ margin: 0, color: colors.text })}>
