@@ -290,6 +290,12 @@ test('parseAuthoredPackageJson rejects invalid manifests with a specific error p
 		],
 		[
 			'@kentcdodds/sentry-bridge',
+			sentryHook(),
+			/kody\.webhooks "sentry" must declare verification/,
+			sentryExports,
+		],
+		[
+			'@kentcdodds/sentry-bridge',
 			sentryHook({ rateLimitPerMinute: 601 }),
 			/rateLimitPerMinute/,
 			sentryExports,
@@ -575,6 +581,15 @@ test('parseAuthoredPackageJson accepts kody.webhooks with verification, replay, 
 		),
 	).toThrow(/verification/)
 
+	const publishedWithoutVerification = parse(
+		'@kentcdodds/sentry-bridge',
+		sentryHook(),
+		{ ...sentryExports, mode: 'published' },
+	)
+	expect(
+		publishedWithoutVerification.kody.webhooks?.[0]?.verification,
+	).toBeUndefined()
+
 	const trusted = parse(
 		'@kentcdodds/discord',
 		{
@@ -585,6 +600,7 @@ test('parseAuthoredPackageJson accepts kody.webhooks with verification, replay, 
 					responseMode: 'sync',
 					inputMode: 'params',
 					rateLimitPerMinute: 600,
+					verification: { type: 'url-secret' },
 				},
 			],
 		},
@@ -602,6 +618,7 @@ test('parseAuthoredPackageJson accepts kody.webhooks with verification, replay, 
 			responseMode: 'sync',
 			inputMode: 'params',
 			rateLimitPerMinute: 600,
+			verification: { type: 'url-secret' },
 		},
 	])
 
@@ -703,6 +720,7 @@ test('parseAuthoredPackageJson accepts kody.webhooks with verification, replay, 
 					name: 'events',
 					export: './handle-events',
 					challenge: hubChallenge,
+					verification: { type: 'url-secret' },
 				},
 			],
 		},
@@ -714,6 +732,7 @@ test('parseAuthoredPackageJson accepts kody.webhooks with verification, replay, 
 			name: 'events',
 			exportName: './handle-events',
 			challenge: hubChallenge,
+			verification: { type: 'url-secret' },
 		},
 	])
 })

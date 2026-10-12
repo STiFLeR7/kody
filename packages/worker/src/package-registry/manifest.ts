@@ -159,6 +159,7 @@ export function parseAuthoredPackageJson(input: {
 	assertPackageWebhooks({
 		manifest: authored,
 		manifestPath: input.manifestPath,
+		mode: input.mode ?? 'authoring',
 	})
 
 	return authored
@@ -273,6 +274,7 @@ function splitPublishedCredentials(
 function assertPackageWebhooks(input: {
 	manifest: AuthoredPackageJson
 	manifestPath?: string
+	mode: PackageManifestParseMode
 }) {
 	for (const webhook of input.manifest.kody.webhooks ?? []) {
 		try {
@@ -285,7 +287,16 @@ function assertPackageWebhooks(input: {
 				`Invalid ${input.manifestPath ?? packageManifestPath}:\nkody.webhooks "${webhook.name}" export "${webhook.export}" is invalid: ${getErrorMessage(error)}`,
 			)
 		}
+		if (input.mode === 'authoring' && !webhook.verification) {
+			throw new Error(
+				`Invalid ${input.manifestPath ?? packageManifestPath}:\n${webhookVerificationRequiredMessage(webhook.name)}`,
+			)
+		}
 	}
+}
+
+export function webhookVerificationRequiredMessage(webhookName: string) {
+	return `kody.webhooks "${webhookName}" must declare verification. Use { "type": "url-secret" } when the sender cannot sign, or an HMAC type such as { "type": "hmac-sha256", "header": "x-kody-signature", "encoding": "hex", "prefix": "sha256=" }.`
 }
 
 export function normalizePackageWorkspacePath(path: string) {

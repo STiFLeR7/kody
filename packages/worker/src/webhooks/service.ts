@@ -25,6 +25,7 @@ import {
 	listPackageWebhooks,
 	type PackageWebhookManifestEntry,
 	webhookHmacVerification,
+	webhookVerificationRequiredMessage,
 } from '#worker/package-registry/manifest.ts'
 import { resolveSavedPackage } from '#worker/package-invocations/module-artifacts.ts'
 import { listSavedPackagesByUserId } from '#worker/package-registry/repo.ts'
@@ -345,6 +346,9 @@ export async function mintWebhookUrlForUser(input: {
 		webhookName,
 	})
 
+	if (!declared.verification) {
+		throw new McpCallerError(webhookVerificationRequiredMessage(webhookName))
+	}
 	const verification =
 		webhookHmacVerification(declared.verification) ?? defaultWebhookVerification
 

@@ -85,6 +85,7 @@ vi.mock('#worker/package-registry/source.ts', () => ({
 						responseMode: 'sync',
 						inputMode: 'params',
 						rateLimitPerMinute: 600,
+						verification: { type: 'url-secret' },
 					},
 				],
 			},
@@ -212,7 +213,7 @@ test('package webhooks API mints, reveals, rotates, and toggles a declared webho
 		urlRecoverable: false,
 		inputMode: 'params',
 		rateLimitPerMinute: 600,
-		verification: null,
+		verification: { type: 'url-secret' },
 	})
 
 	const minted = await act('mint')
