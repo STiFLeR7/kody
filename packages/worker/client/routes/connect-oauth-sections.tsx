@@ -249,6 +249,8 @@ export function renderStatusCallout(input: {
 	currentStep: ConnectOauthStep
 	provider?: string | null
 	connectionName?: string | null
+	/** When false, show the alert text only (incomplete-config owns the prompt). */
+	includePrompt?: boolean
 }) {
 	if (input.statusTone === 'error') {
 		return (
@@ -263,13 +265,15 @@ export function renderStatusCallout(input: {
 				<p mix={css({ margin: 0, color: colors.error })}>
 					{input.statusMessage}
 				</p>
-				<ErrorAgentPromptButton
-					prompt={buildConnectOauthFailureAgentPrompt({
-						statusMessage: input.statusMessage,
-						provider: input.provider,
-						connectionName: input.connectionName,
-					})}
-				/>
+				{input.includePrompt === false ? null : (
+					<ErrorAgentPromptButton
+						prompt={buildConnectOauthFailureAgentPrompt({
+							statusMessage: input.statusMessage,
+							provider: input.provider,
+							connectionName: input.connectionName,
+						})}
+					/>
+				)}
 			</div>
 		)
 	}
@@ -293,9 +297,7 @@ export function renderConnectOauthNoConfigBody(input: {
 	onFilterInput: (node: HTMLInputElement | null) => void
 	onFilterDetach: (node: HTMLInputElement | null) => void
 }) {
-	if (input.requestedProvider && input.hasConfigError) {
-		return renderIncompleteConfig(input.requestedProvider)
-	}
+	const incomplete = Boolean(input.requestedProvider && input.hasConfigError)
 	return (
 		<>
 			{renderStatusCallout({
@@ -303,18 +305,21 @@ export function renderConnectOauthNoConfigBody(input: {
 				statusMessage: input.statusMessage,
 				currentStep: input.currentStep,
 				provider: input.requestedProvider,
+				includePrompt: !incomplete,
 			})}
-			{isConnectOauthCallbackUrl(
-				new URL(input.currentHref, 'https://kody.local'),
-			) && input.statusTone !== 'error'
-				? renderCallbackPending()
-				: renderChooser({
-						chooserOptions: input.chooserOptions,
-						chooserFilter: input.chooserFilter,
-						onFilterChange: input.onFilterChange,
-						onFilterInput: input.onFilterInput,
-						onFilterDetach: input.onFilterDetach,
-					})}
+			{incomplete
+				? renderIncompleteConfig(input.requestedProvider ?? '')
+				: isConnectOauthCallbackUrl(
+							new URL(input.currentHref, 'https://kody.local'),
+					  ) && input.statusTone !== 'error'
+					? renderCallbackPending()
+					: renderChooser({
+							chooserOptions: input.chooserOptions,
+							chooserFilter: input.chooserFilter,
+							onFilterChange: input.onFilterChange,
+							onFilterInput: input.onFilterInput,
+							onFilterDetach: input.onFilterDetach,
+						})}
 		</>
 	)
 }
