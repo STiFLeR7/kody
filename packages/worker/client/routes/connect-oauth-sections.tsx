@@ -1,8 +1,11 @@
 import { type ConnectOauthExistingConnection } from '#universal/loader-data.ts'
 import { docHref } from '#universal/docs-nav.ts'
 import { css, ref } from 'remix/component'
-import { CopyTextButton } from '#client/copy-text-button.tsx'
-import { buildIncompleteConnectOauthPrompt } from '#universal/oauth-scopes.ts'
+import { ErrorAgentPromptButton } from '#client/error-agent-prompt-button.tsx'
+import {
+	buildConnectOauthFailureAgentPrompt,
+	buildIncompleteConnectOauthAgentPrompt,
+} from '#universal/error-agent-prompt-presets.ts'
 import { isConnectOauthCallbackUrl } from '#universal/oauth-connect.ts'
 import { on } from '#client/event-mixin.ts'
 import { ProviderMark } from '#client/provider-icons.tsx'
@@ -227,9 +230,8 @@ export function renderIncompleteConfig(provider: string) {
 				Copy this prompt for your agent so it can fill in the authorize and
 				token URLs and send you a complete link.
 			</p>
-			<CopyTextButton
-				value={buildIncompleteConnectOauthPrompt({ provider })}
-				idleLabel="Copy setup prompt"
+			<ErrorAgentPromptButton
+				prompt={buildIncompleteConnectOauthAgentPrompt({ provider })}
 				variant="primary"
 			/>
 			<p mix={css(descriptionCss)}>
@@ -247,6 +249,8 @@ export function renderStatusCallout(input: {
 	statusTone: ConnectOauthStatusTone
 	statusMessage: string
 	currentStep: ConnectOauthStep
+	provider?: string | null
+	connectionName?: string | null
 }) {
 	if (input.statusTone === 'error') {
 		return (
@@ -261,6 +265,13 @@ export function renderStatusCallout(input: {
 				<p mix={css({ margin: 0, color: colors.error })}>
 					{input.statusMessage}
 				</p>
+				<ErrorAgentPromptButton
+					prompt={buildConnectOauthFailureAgentPrompt({
+						statusMessage: input.statusMessage,
+						provider: input.provider,
+						connectionName: input.connectionName,
+					})}
+				/>
 			</div>
 		)
 	}

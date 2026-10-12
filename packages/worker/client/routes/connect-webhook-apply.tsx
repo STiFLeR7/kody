@@ -1,6 +1,8 @@
 import { type ConnectWebhookApplyLoaderData } from '#universal/loader-data.ts'
 import { type Handle, css } from 'remix/component'
+import { ErrorAgentPromptButton } from '#client/error-agent-prompt-button.tsx'
 import { on } from '#client/event-mixin.ts'
+import { buildHumanApprovalErrorAgentPrompt } from '#universal/error-agent-prompt-presets.ts'
 import { readCurrentRouterHref } from '#client/client-router.tsx'
 import { tryConsumeRouteLoaderData } from '#client/loader-data-context.tsx'
 import {
@@ -172,12 +174,32 @@ export function ConnectWebhookApplyRoute(handle: Handle) {
 				</header>
 
 				{message ? (
-					<p
-						mix={css(getAccentCalloutCss())}
-						data-testid="connect-webhook-apply-message"
-					>
-						{message}
-					</p>
+					<>
+						<p
+							mix={css(getAccentCalloutCss())}
+							data-testid="connect-webhook-apply-message"
+						>
+							{message}
+						</p>
+						{payload?.ok && message.includes('Destination approved') ? null : (
+							<>
+								<ErrorAgentPromptButton
+									prompt={buildHumanApprovalErrorAgentPrompt({
+										activity:
+											'Approving an outbound webhook destination in the browser.',
+										errorMessage: message,
+										ids: {
+											packageName:
+												payload && payload.ok ? payload.packageName : null,
+											packageKodyId:
+												payload && payload.ok ? payload.packageKodyId : null,
+											path: '/connect/webhook-apply',
+										},
+									})}
+								/>
+							</>
+						)}
+					</>
 				) : null}
 
 				{!payload ? (
@@ -187,6 +209,14 @@ export function ConnectWebhookApplyRoute(handle: Handle) {
 				) : !payload.ok ? (
 					<section mix={css(cardCss)} data-testid="connect-webhook-apply-error">
 						<p mix={css({ margin: 0 })}>{payload.error}</p>
+						<ErrorAgentPromptButton
+							prompt={buildHumanApprovalErrorAgentPrompt({
+								activity:
+									'Approving an outbound webhook destination in the browser.',
+								errorMessage: payload.error,
+								ids: { path: '/connect/webhook-apply' },
+							})}
+						/>
 					</section>
 				) : (
 					<section mix={css(cardCss)} data-testid="connect-webhook-apply-card">

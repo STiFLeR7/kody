@@ -667,7 +667,12 @@ export function ConnectOauthRoute(handle: Handle) {
 							<p mix={css(pageDescriptionCss)}>{description}</p>
 						) : null}
 					</header>
-					{renderStatusCallout({ statusTone, statusMessage, currentStep })}
+					{renderStatusCallout({
+						statusTone,
+						statusMessage,
+						currentStep,
+						provider: requestedProvider,
+					})}
 					{requestedProvider && hasConfigError
 						? renderIncompleteConfig(requestedProvider)
 						: isConnectOauthCallbackUrl(
@@ -709,7 +714,13 @@ export function ConnectOauthRoute(handle: Handle) {
 						<p mix={css(pageDescriptionCss)}>{description}</p>
 					) : null}
 				</header>
-				{renderStatusCallout({ statusTone, statusMessage, currentStep })}
+				{renderStatusCallout({
+					statusTone,
+					statusMessage,
+					currentStep,
+					provider: currentConfig.provider,
+					connectionName: currentConfig.providerKey,
+				})}
 				{currentStep === 'setup'
 					? renderRedirectUriCard({
 							config: currentConfig,
