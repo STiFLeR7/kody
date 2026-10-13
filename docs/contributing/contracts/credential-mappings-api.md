@@ -544,10 +544,21 @@ Only index pages redirect. Deeper paths that are approval or OAuth flows
 (`/@:org/-/secrets/approve`, `/@:org/-/mcp-servers/:serverId/authorize`,
 `/account/mcp-servers/oauth/callback`) keep serving. `/connect/oauth` never
 redirects: it is the registered OAuth redirect URI for bring-your-own apps.
-`credentialRedirectFor(url)` returns the new URL or null so the router and tests
-share one table. Legacy `/connect/secret-set` links read `package` as an allowed
-package id, so the redirect renames it to `allowedPackages` (the creation link
-uses `forPackage` for the package a need belongs to).
+`credentialRedirectFor(url)` (`universal/credential-redirects.ts`) returns the
+new path and query or null so the router and tests share one table. Legacy
+`/connect/secret-set` links read `package` as an allowed package id, so the
+redirect renames it to `allowedPackages` (the creation link uses `forPackage`
+for the package a need belongs to).
+
+Wiring waits on the pages that replace the old ones:
+
+- The four org index routes switch on by wrapping their handlers with
+  `withCredentialIndexRedirect` (`app/handlers/credential-index-redirect.ts`) in
+  the PR that moves the add forms and row editors off those index pages. Until
+  then the Credentials page links to them, and a redirect would loop.
+- `/connect/secret-set` switches on when `/connect/credential` serves the
+  one-pager. Today `/connect/credential?kind=secret` redirects to
+  `/connect/secret-set`, so redirecting back would loop.
 
 ## Build order
 
