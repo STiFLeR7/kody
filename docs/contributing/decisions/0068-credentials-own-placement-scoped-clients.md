@@ -7,7 +7,9 @@
   old-lane removal; integration-token placeholders are permanent; the webhook
   no-actor exception stays unless a proven replacement breaks nothing);
   2026-10-12 (Kent: manifest credential need `kind` is optional — see
-  [Amendment 2026-10-12](#amendment-2026-10-12))
+  [Amendment 2026-10-12](#amendment-2026-10-12)); 2026-10-13 (Kent: stored
+  default and trigger credential mappings, approved by a person — see
+  [Amendment 2026-10-13](#amendment-2026-10-13-credential-mappings))
 - **Supersedes in part:** [0021](./0021-publish-gated-package-composition.md)
   (credential authority for the opt-in types used through scoped clients), and
   credentials plan v4 section 3.3 (assignments) and section 3.4 (placeholder
@@ -490,3 +492,25 @@ Kent: manifest credential need `kind` becomes **optional**.
 - **Naming direction:** `credentials` is the umbrella term everywhere (secrets
   and integrations are credential subtypes). UI/UX is designed separately and is
   not decided here.
+
+## Amendment 2026-10-13: credential mappings
+
+Kent (voice, 2026-10-12): packages get explicit, human-approved credential
+mappings. This changes "no mapping tables" and "there is never a default
+credential" in the sections above, and nothing else.
+
+- **Default mappings:** a package may store an ad hoc default mapping per need
+  (need key to credential ids). Two layers: an org layer set by package managers
+  (org credentials only) and a per-person layer.
+- **Trigger mappings:** each trigger instance (enablement) may override a need;
+  a need with no override inherits the enabler's default mapping.
+- **Resolution order:** call map, then trigger mapping, then the person's
+  default, then the org default, then auto-resolve (rule 3). An unusable ref in
+  a trigger mapping is an error for that run; unusable refs in a default are
+  skipped.
+- **Authority is unchanged:** a mapping grants nothing. Runs still need the
+  actor's Use plus `package:execute`, and option lists stay filtered by Use.
+- **Agents only propose:** a proposal takes effect only through the approval
+  page, where one Approve applies trigger and default mappings together.
+- **Contract:**
+  [credential mappings API](../contracts/credential-mappings-api.md).

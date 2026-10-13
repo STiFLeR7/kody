@@ -117,6 +117,8 @@ style, tests, MCP capabilities, and runtime architecture.
   lifecycle, [authorization](./architecture/authorization.md) (RBAC)
 - [CLI streaming gateway-fetch contract](./contracts/cli-streaming-gateway-fetch.md)
   — native Open API hop for local `kody.gatewayFetchStream`
+- [Credential mappings API contract](./contracts/credential-mappings-api.md) —
+  creation links, credentials list, package mappings, approval, runtime links
 - [Direct-upload host token](./design-notes/direct-upload-host-token.md) —
   two-way door design note; gateway remains the default
 
