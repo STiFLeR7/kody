@@ -20,6 +20,18 @@ export const credentialCallMapLimits = {
 
 const text = z.string().trim().min(1).max(credentialCallMapLimits.maxTextLength)
 
+// A need key or a provider slug, untrimmed so no two keys collapse into one.
+const keyPattern = new RegExp(
+	`^[A-Za-z0-9][A-Za-z0-9._-]{0,${credentialCallMapLimits.maxTextLength - 1}}$`,
+)
+
+const credentialCallMapKey = z
+	.string()
+	.regex(
+		keyPattern,
+		'A credentials map key starts with a letter or digit and uses letters, digits, dots, underscores, or hyphens.',
+	)
+
 const credentialPickSchema = z.union([
 	text,
 	z
@@ -32,7 +44,7 @@ const credentialPickSchema = z.union([
 
 export const credentialCallMapSchema = z
 	.record(
-		text,
+		credentialCallMapKey,
 		z.union([
 			credentialPickSchema,
 			z.array(credentialPickSchema).max(credentialCallMapLimits.maxPicksPerKey),
@@ -64,6 +76,11 @@ export type RunCredentialCallMap = {
 	/** An unknown key is an error (an invoke) rather than a warning. */
 	strict: boolean
 	onWarnings?: (warnings: Array<string>) => void
+	/**
+	 * Already checked by the run that started this one (a computed `import()`
+	 * library load): only the credential tools use it.
+	 */
+	checked?: boolean
 }
 
 export function normalizeCredentialCallMap(
@@ -77,7 +94,7 @@ export function normalizeCredentialCallMap(
 				? { name: pick, scope: null }
 				: { name: pick.name, scope: pick.scope ?? null },
 		)
-		map.set(key.trim(), picks)
+		map.set(key, picks)
 	}
 	return map.size > 0 ? map : null
 }

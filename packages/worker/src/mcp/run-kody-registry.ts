@@ -959,7 +959,7 @@ export function createComputedPackageImportTools(input: {
 					computedPackageImportTools: nestedTools,
 					closedWorldRetrieverRuntime: input.closedWorldRetrieverRuntime,
 					credentialCallMap: input.credentialCallMap
-						? { map: input.credentialCallMap, strict: false }
+						? { map: input.credentialCallMap, strict: false, checked: true }
 						: null,
 					// Library load is not enter-as-package: do not attribute a
 					// package_export usage event to the caller's package id.
@@ -1238,7 +1238,7 @@ export async function runBundledModuleWithRegistry(
 		const closedWorldRetrieverRuntime =
 			options?.closedWorldRetrieverRuntime === true
 		const callMap = options?.credentialCallMap ?? null
-		if (callMap) {
+		if (callMap && !callMap.checked) {
 			const { warnings } = await validateCredentialCallMap({
 				env,
 				request: callerContext.request ?? null,
