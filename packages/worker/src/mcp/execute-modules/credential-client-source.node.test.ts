@@ -216,6 +216,23 @@ test('structured errors come back as Errors with code, retryWith, and options', 
 		message: 'Not sent to evil.example.',
 		retryWith: [],
 	})
+	expect(fetchError).not.toHaveProperty('createUrl')
+
+	vi.stubGlobal(
+		'fetch',
+		vi.fn(async () => {
+			throw new Error(
+				'[credential_not_found] It is gone. Create one at https://kody.codes/connect/credential?name=x',
+			)
+		}),
+	)
+	const goneError = (await client.fetch!('https://api.example.com/').catch(
+		(caught: unknown) => caught,
+	)) as CredentialError & { createUrl?: string }
+	expect(goneError).toMatchObject({
+		code: 'credential_not_found',
+		createUrl: 'https://kody.codes/connect/credential?name=x',
+	})
 })
 
 test('named and credentials open through the same tool, and signing clients sign on the host', async () => {

@@ -382,6 +382,10 @@ export function ConnectSecretSetRoute(handle: Handle) {
 					value: editorState.value,
 					allowedHosts: policy.allowedHosts,
 					allowedPackages: policy.allowedPackages,
+					provider:
+						new URL(requestHref, 'http://localhost').searchParams
+							.get('provider')
+							?.trim() || null,
 				}),
 			})
 			if (response.status === 401) {

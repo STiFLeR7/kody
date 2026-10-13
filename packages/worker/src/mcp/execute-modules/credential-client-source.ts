@@ -24,6 +24,7 @@ export function createCredentialClientRuntimeSource() {
 function __kodyCreateCredentialRuntime(__kodyCredentialCall) {
   const handleHeader = ${JSON.stringify(credentialClientHeaderName)};
   const codePattern = /^\\[([a-z_]+)\\] /;
+  const createUrlPattern = /Create one at (https?:\\/\\/\\S+)/;
   const redirectStatuses = new Set([301, 302, 303, 307, 308]);
   const maxRedirects = 20;
   const toError = (body) => {
@@ -40,7 +41,12 @@ function __kodyCreateCredentialRuntime(__kodyCredentialCall) {
     const message = String(error?.message ?? error ?? '');
     const match = codePattern.exec(message);
     if (!match) return error;
-    return toError({ code: match[1], message: message.slice(match[0].length) });
+    const createUrl = createUrlPattern.exec(message)?.[1];
+    return toError({
+      code: match[1],
+      message: message.slice(match[0].length),
+      ...(createUrl ? { createUrl } : {}),
+    });
   };
   const invoke = async (name, args) => {
     let result;
