@@ -179,7 +179,7 @@ Open these before proposing a new primitive, surface, or storage home.
   — accepted 2026-10-12 amendment to 0001. Narrow exception for internet-visible
   serving and approved-bundle retention only; no semver or import pin syntax.
   Forks do not inherit the origin's approval
-- [0070 — Custom domains for package apps (Cloudflare for SaaS on kody.run)](./0070-package-app-custom-domains.md)
+- [0071 — Custom domains for package apps (Cloudflare for SaaS on kody.run)](./0071-package-app-custom-domains.md)
   — SaaS custom hostnames on the package-app zone; org-level for private apps,
   per-app for public; CNAME/ALIAS only (no Enterprise apex A/wildcards); org
   admins; one free domain then $0.10/mo; verify before serve; 24–48h DNS grace
