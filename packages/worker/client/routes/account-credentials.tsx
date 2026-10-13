@@ -16,7 +16,7 @@ import {
 	credentialsDataKey,
 	credentialsRoute,
 	fetchAccountCredentials,
-	readCredentialListFilters,
+	readCredentialListFiltersFromHref,
 	writeCredentialListFilters,
 } from '#client/routes/account-credentials-shared.ts'
 import {
@@ -36,7 +36,7 @@ import {
 	type CredentialProviderBindingItem,
 	credentialKindLabel,
 	credentialStatusLabel,
-	filterCredentialListItems,
+	filterCredentialList,
 } from '#universal/credentials-list.ts'
 import { orgResourcePath } from '#universal/org-pages.ts'
 import { routes } from '#universal/routes.ts'
@@ -197,7 +197,10 @@ export function AccountCredentialsRoute(handle: Handle) {
 	) {
 		const href = readCurrentRouterHref(handle)
 		replaceLocation(
-			writeCredentialListFilters(href, next(readCredentialListFilters(href))),
+			writeCredentialListFilters(
+				href,
+				next(readCredentialListFiltersFromHref(href)),
+			),
 		)
 	}
 
@@ -215,8 +218,8 @@ export function AccountCredentialsRoute(handle: Handle) {
 		const credentials = payload?.credentials ?? []
 		const packages = payload?.packages ?? []
 		const packagesById = new Map(packages.map((pkg) => [pkg.id, pkg]))
-		const filters = readCredentialListFilters(currentHref)
-		const shown = filterCredentialListItems(credentials, filters)
+		const filters = readCredentialListFiltersFromHref(currentHref)
+		const shown = filterCredentialList(credentials, filters)
 		const orgSlug = payload?.orgSlug ?? ''
 		const teamOrg = payload?.teamOrg ?? false
 		const selection = credentialsRoute.getSelection(currentHref)
@@ -240,7 +243,7 @@ export function AccountCredentialsRoute(handle: Handle) {
 			filters,
 		)
 		const packageOptions: Array<ComboboxOption> = [
-			{ id: '', label: 'All packages' },
+			{ id: '', label: 'Any package' },
 			...packages.map((pkg) => ({
 				id: pkg.id,
 				label: pkg.kodyId,
@@ -399,9 +402,9 @@ export function AccountCredentialsRoute(handle: Handle) {
 									<Combobox
 										key={`credential-package-filter:${lockedPackageId}`}
 										id="credential-package-filter"
-										label="Filter credentials by package"
+										label="Filter credentials locked to a package"
 										hideLabel
-										placeholder="All packages"
+										placeholder="Any package"
 										value={lockedPackageId}
 										options={packageOptions}
 										onChange={(packageId) =>

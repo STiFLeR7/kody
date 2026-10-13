@@ -122,13 +122,15 @@ export async function loadCredentialDetail(input: {
 	env: Env
 	request: RequestContext
 	orgId: string
+	/** The viewer's own credential, so its team-org grants are theirs to see. */
+	ownedByViewer: boolean
 	credential: CredentialListItem
 	/** The org's packages, most recently updated first. */
 	packages: ReadonlyArray<SavedPackageRecord>
 }): Promise<AccountCredentialDetail> {
 	const checked = input.packages.slice(0, maxUsagePackages)
 	const [grants, usage] = await Promise.all([
-		input.credential.scope === 'personal'
+		input.ownedByViewer
 			? listGrants(input.env.APP_DB, input.credential.id)
 			: [],
 		listUsage({

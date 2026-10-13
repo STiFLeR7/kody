@@ -199,10 +199,10 @@ export function renderCredentialDetail(input: {
 						label: 'Owner',
 						value:
 							credential.scope === 'personal'
-								? input.teamOrg
-									? 'Personal (yours, granted to this org)'
-									: 'Personal'
-								: 'Org',
+								? 'Personal (yours, granted to this org)'
+								: input.teamOrg
+									? 'Org'
+									: 'Personal',
 					},
 					{ label: 'Provider', value: credential.provider ?? 'None' },
 					{
@@ -279,7 +279,7 @@ export function renderCredentialDetail(input: {
 				</p>,
 			)}
 
-			{credential.scope === 'personal'
+			{credential.scope === 'personal' || !input.teamOrg
 				? renderField(
 						'Shared with',
 						detail === null ? (

@@ -144,16 +144,16 @@ Agents hand people this link the way they hand out `/connect/secret-set` and
 `/connect/oauth` today. Runtime errors build it (see
 [Runtime errors](#runtime-errors)).
 
-| Param             | Meaning                                                                                                                                                                                                          |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`            | One of `credentialKinds`. Absent: the chooser starts on `secret`.                                                                                                                                                |
-| `kindMode`        | `hint` (default): `kind` is preselected and the kind chooser is shown. `required`: the kind is locked and no chooser is shown. Ignored without `kind`.                                                           |
-| `name`            | Prefilled credential name.                                                                                                                                                                                       |
-| `provider`        | Prefilled provider slug (`^[a-z0-9-]+$`).                                                                                                                                                                        |
-| `description`     | Prefilled description.                                                                                                                                                                                           |
-| `allowedHosts`    | Prefilled hosts, comma separated or repeated (same as `/connect/secret-set`).                                                                                                                                    |
-| `package`, `need` | The package (kody id) and need key this credential is for. After saving, the page offers the approval link that maps it as the default.                                                                          |
-| anything else     | Passed through unchanged to the reused form: `/connect/secret-set` params (`scope`, `packageId`, `expiresAt`, `allowedPackages`) or `/connect/oauth` params (`authorizeUrl`, `tokenUrl`, `scopes`, `flow`, ...). |
+| Param                | Meaning                                                                                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`               | One of `credentialKinds`. Absent: the chooser starts on `secret`.                                                                                                                                                      |
+| `kindMode`           | `hint` (default): `kind` is preselected and the kind chooser is shown. `required`: the kind is locked and no chooser is shown. Ignored without `kind`.                                                                 |
+| `name`               | Prefilled credential name.                                                                                                                                                                                             |
+| `provider`           | Prefilled provider slug (`^[a-z0-9-]+$`).                                                                                                                                                                              |
+| `description`        | Prefilled description.                                                                                                                                                                                                 |
+| `allowedHosts`       | Prefilled hosts, comma separated or repeated (same as `/connect/secret-set`).                                                                                                                                          |
+| `forPackage`, `need` | The package (kody id) and need key this credential is for. After saving, the page offers the approval link that maps it as the default. (`package` is taken: `/connect/secret-set` reads it as an allowed package id.) |
+| anything else        | Passed through unchanged to the reused form: `/connect/secret-set` params (`scope`, `packageId`, `expiresAt`, `allowedPackages`) or `/connect/oauth` params (`authorizeUrl`, `tokenUrl`, `scopes`, `flow`, ...).       |
 
 The page body reuses the existing secret-intake form for `secret`, `url`,
 `login`, and `signing`, the OAuth connect form for `oauth`, and the MCP server
@@ -161,9 +161,18 @@ add form for `mcp`.
 
 Until the one-pager ships, the server answers `/connect/credential` with a 302
 to the existing page for the kind, carrying the same query:
-`/connect/secret-set` (`secret`, `url`, `login`, `signing`, or no kind),
-`/connect/oauth` (`oauth`), or `/@<org>/-/mcp-servers` (`mcp`). Links built
-today keep working when the one-pager replaces the redirect.
+
+- `secret` or no kind: `/connect/secret-set`. Saving there also stores
+  `provider` from the link, so the new Key auto-resolves for the need.
+- `oauth`: `/connect/oauth`. When a built-in OAuth app exists for the provider,
+  runtime links add `platform=<slug>` so that page opens the built-in app.
+- `mcp`: `/@<org>/-/mcp-servers`.
+- `url`, `login`, `signing`: the existing forms cannot create these kinds, so
+  the redirect goes to `/@<org>/-/secrets` without a prefilled form. Runtime
+  errors for these kinds also tell the agent to create the credential with
+  `secretSet` and that `kind`.
+
+Links built today keep working when the one-pager replaces the redirect.
 
 Codecs: `buildCredentialCreateHref(input)` and
 `parseCredentialCreateQuery(url)`.
@@ -226,6 +235,12 @@ export type CredentialListResponse = {
 - Session-scoped Keys are not listed.
 - `scope: 'personal'` rows are the viewer's own personal credentials granted to
   this org. Nobody else's personal credentials appear.
+- Org binding works like the other org-owned account JSON: a same-origin fetch
+  from an `/@slug/-/…` page binds that org, and the Secrets section gate
+  applies. Without such a Referer the signup org is used.
+- Org rows follow the viewer's grants: Keys need `secret:use`; OAuth and MCP
+  rows need `integration:read` (org-wide or granted on that credential).
+- Package code cannot call `credentialList`.
 
 ## Package credentials API
 
@@ -310,9 +325,10 @@ Who can write:
 | `trigger`          | The enabler only. Writing a trigger mapping for a trigger the writer has not enabled turns it on for them (webhooks must be minted first; a webhook another person enabled is refused). |
 
 Validation per change: the need exists in the published closure; each ref exists
-and the writer can Use it; kind matches when the need declares one (any
-fetch-capable kind otherwise: `secret`, `oauth`, `login`, `url`); provider
-matches when both sides have one; at most one ref unless `multiple`.
+and the writer can Use it; kind matches when the need declares one (otherwise
+any fetch-capable kind, the same set as ADR 0068 resolution rule 1: `secret`,
+`oauth`, `login`); provider matches when both sides have one; at most one ref
+unless `multiple`.
 
 ## Mapping proposals and the approval page
 
@@ -334,8 +350,16 @@ GET /@:username/:kodyId/approve-credentials?<proposal>
 Each mapping param is repeatable, one value per credential:
 
 - `work` (name), `org:work` or `personal:work` (scoped name), or
-  `id:<credentialId>`.
-- A single empty value (`default[github]=`) maps the need to `[]`.
+  `id:<credentialId>`. A name that itself starts with `org:`, `personal:`,
+  `id:`, or `name:` is written `name:<name>` (`name:id:abc` is the credential
+  named `id:abc`).
+- A single empty value (`default[github]=`) maps the need to `[]`. An empty
+  value beside other values, or a value that is not a valid pick (`org:`), is a
+  proposal error, never `[]`.
+- Inside the brackets, `%`, `[`, and `]` in a need key or trigger name are
+  percent-encoded a second time (`%25`, `%5B`, `%5D`), so a cron job named
+  `daily]backup` is `trigger[cron:daily%5Dbackup][github]` after query decoding.
+  The codecs do this; hand-built links only need it for those three characters.
 
 At most 64 mapping params. Example:
 
@@ -454,9 +478,12 @@ export type CredentialClientErrorBody = {
   message still get the link.
 - `credential_unbound` for a need that declares `kind` links with
   `kindMode=required`; for a need without `kind` it links with `kindMode=hint`
-  (`oauth` when a platform OAuth app exists for the provider, else `secret`).
-  `provider`, `name` (the need key), `description`, `package`, and `need` are
-  prefilled.
+  (`oauth` when a platform OAuth app exists for the provider, plus
+  `platform=<slug>`; else `secret`). `provider`, `name` (the need key),
+  `description`, `forPackage`, and `need` are prefilled.
+- For a need that declares `url`, `login`, or `signing`, the message also says
+  to create it with `secretSet` and that `kind`, since the website cannot create
+  those kinds until the one-pager ships.
 - `credential_not_found` for `credential.named(name)` links with `name`
   prefilled and no kind.
 - A missing `{{secret:NAME}}` placeholder in a run keeps its `secret_required`
@@ -481,7 +508,9 @@ Only index pages redirect. Deeper paths that are approval or OAuth flows
 `/account/mcp-servers/oauth/callback`) keep serving. `/connect/oauth` never
 redirects: it is the registered OAuth redirect URI for bring-your-own apps.
 `credentialRedirectFor(url)` returns the new URL or null so the router and tests
-share one table.
+share one table. Legacy `/connect/secret-set` links read `package` as an allowed
+package id, so the redirect renames it to `allowedPackages` (the creation link
+uses `forPackage` for the package a need belongs to).
 
 ## Build order
 

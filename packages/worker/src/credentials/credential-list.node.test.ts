@@ -4,20 +4,27 @@ import {
 	personalOrgId,
 	personIdFromStored,
 } from '@kody-internal/shared/owner-person-ids.ts'
+import { type OrgRole } from '@kody-internal/shared/request-context.ts'
 import { expect, test } from 'vitest'
 import { createOrganization } from '#worker/orgs/create-organization.ts'
 import { provisionPersonalOrg } from '#worker/orgs/provision.ts'
+import { deriveRequestContext } from '#worker/request-context/request-context.ts'
 import { applyAllMigrations } from '#worker/test-support/apply-all-migrations.ts'
 import { createTestOrgAuditWriter } from '#worker/test-support/create-audit-db.ts'
 import { createD1FromSqlite } from '#worker/test-support/create-d1-from-sqlite.ts'
 import { testStableUserIdFromEmail } from '#worker/test-support/stable-user-id.ts'
 import { createInMemoryUserMeterEnv } from '#worker/test-support/user-meter.ts'
 import { saveSecret } from '#mcp/secrets/service.ts'
+import { type CredentialListItem } from '#universal/credential-contracts.ts'
 import { findCredentialIdsByLegacyName } from './credential-ids.ts'
-import { listOrgCredentials } from './credential-list.ts'
+import {
+	filterCredentialList,
+	readCredentialListFilters,
+} from '#universal/credentials-list.ts'
+import { listCredentialsForViewer } from './credential-list.ts'
 import { grantPersonalCredentialToOrg } from './personal-credentials.ts'
 
-const now = new Date('2026-10-11T00:00:00.000Z')
+const now = '2026-10-13T00:00:00.000Z'
 
 async function setup() {
 	const sqlite = new DatabaseSync(':memory:')
@@ -28,30 +35,27 @@ async function setup() {
 		...createInMemoryUserMeterEnv().env,
 		SECRET_STORE_KEY: 'test-secret-store-key-32-chars-minimum',
 	} as unknown as Env
-	const people = Object.fromEntries(
-		(['ann', 'bea'] as const).map((username) => {
-			const stableUserId = testStableUserIdFromEmail(`${username}@example.com`)
-			return [
-				username,
-				{ stableUserId, personId: personIdFromStored(stableUserId) },
-			]
-		}),
-	) as Record<
-		'ann' | 'bea',
-		{ stableUserId: string; personId: ReturnType<typeof personIdFromStored> }
-	>
-	for (const [username, person] of Object.entries(people)) {
+	const person = (username: string) => {
+		const stableUserId = testStableUserIdFromEmail(`${username}@example.com`)
+		return { stableUserId, personId: personIdFromStored(stableUserId) }
+	}
+	const ann = person('ann')
+	const bea = person('bea')
+	for (const [username, who] of [
+		['ann', ann],
+		['bea', bea],
+	] as const) {
 		await provisionPersonalOrg(db, {
-			stableUserId: person.stableUserId,
+			stableUserId: who.stableUserId,
 			username,
-			createdAt: now.toISOString(),
+			createdAt: now,
 		})
 	}
 	const created = await createOrganization(
 		db,
 		{} as Pick<Env, 'BUNDLE_ARTIFACTS_KV'>,
 		{
-			personId: people.bea.personId,
+			personId: bea.personId,
 			audit: createTestOrgAuditWriter(),
 			slug: 'quillworks-co',
 			displayName: 'Acme',
@@ -67,201 +71,252 @@ async function setup() {
 			`INSERT INTO org_memberships (org_id, user_id, role, created_at)
 			 VALUES (?, ?, 'member', ?)`,
 		)
-		.bind(acmeId, people.ann.stableUserId, now.toISOString())
+		.bind(acmeId, ann.stableUserId, now)
 		.run()
-	const annOrgId = personalOrgId(people.ann.personId)
-	return { db, env, people, acmeId, annOrgId }
-}
 
-async function secretId(db: D1Database, ownerId: string, name: string) {
-	return (
-		await findCredentialIdsByLegacyName(db, ownerId, { type: 'secret', name })
-	)[0]!
-}
-
-test('a personal org lists every kind as personal metadata, never values', async () => {
-	const t = await setup()
 	await saveSecret({
-		env: t.env,
-		userId: t.annOrgId,
+		env,
+		userId: acmeId,
 		scope: 'user',
-		name: 'OPENAI_API_KEY',
-		value: 'sk-live-never-shown',
-		description: 'Model calls',
+		name: 'stripeKey',
+		value: 'sk-value',
+		description: 'Stripe billing',
 	})
+	sqlite
+		.prepare(
+			`UPDATE secret_entries SET allowed_hosts = '["api.stripe.com"]' WHERE name = 'stripeKey'`,
+		)
+		.run()
 	await saveSecret({
-		env: t.env,
-		userId: t.annOrgId,
-		scope: 'user',
-		name: 'STAGING_TOKEN',
-		value: 'staging-never-shown',
-		expiresAt: '2026-10-01T00:00:00.000Z',
-	})
-	await saveSecret({
-		env: t.env,
-		userId: t.annOrgId,
+		env,
+		userId: acmeId,
 		scope: 'package',
-		name: 'SLACK_WEBHOOK_TOKEN',
-		value: 'slack-never-shown',
+		name: 'packageToken',
+		value: 'pkg-value',
 		storageContext: {
 			sessionId: null,
 			appId: null,
-			packageId: 'pkg-digest',
-			storageId: 'pkg-digest',
+			packageId: 'pkg-1',
+			storageId: 'pkg-1',
 		},
 	})
-	const openAiId = await secretId(t.db, t.annOrgId, 'OPENAI_API_KEY')
-	await t.db
+	sqlite
 		.prepare(
-			`UPDATE secret_entries SET allowed_hosts = '["api.openai.com"]',
-				allowed_packages = '["pkg-triage"]' WHERE id = ?`,
+			`INSERT INTO user_oauth_apps (user_id, slug, provider, client_id, token_url, flow, api_base_url)
+			 VALUES (?, 'gh-app', 'github', 'client', 'https://github.com/token', 'confidential', 'https://api.github.com')`,
 		)
-		.bind(openAiId)
-		.run()
-	await t.db
+		.run(acmeId)
+	sqlite
 		.prepare(
-			`INSERT INTO mcp_server_settings
-				(id, user_id, name, url, enabled, usage_mode, allowed_packages_json)
-			 VALUES ('mcp-docs', ?, 'docs', 'https://docs.example.com/mcp', 0, 'packages', '["pkg-triage"]')`,
+			`INSERT INTO user_integrations (id, user_id, name, app_slug, access_token_encrypted, connected_at)
+			 VALUES ('i-github', ?, 'github', 'gh-app', 'ct', ?)`,
 		)
-		.bind(t.annOrgId)
-		.run()
-	await t.db
+		.run(acmeId, now)
+	sqlite
 		.prepare(
-			`INSERT INTO mcp_server_settings (id, user_id, name, url, last_error)
-			 VALUES ('mcp-linear', ?, 'linear', 'https://mcp.linear.app/sse', 'Token refresh failed')`,
+			`INSERT INTO mcp_server_settings (id, user_id, name, url, enabled, last_error)
+			 VALUES ('mcp-linear', ?, 'linear', 'https://mcp.linear.app/sse', 1, 'boom')`,
 		)
-		.bind(t.annOrgId)
-		.run()
-	await t.db
-		.prepare(
-			`INSERT INTO saved_packages (id, user_id, name, kody_id, description, source_id)
-			 VALUES ('pkg-digest', ?, 'digest', 'digest', 'pkg', 'source-digest')`,
-		)
-		.bind(t.annOrgId)
-		.run()
-	await t.db
-		.prepare(
-			`INSERT INTO secret_provider_bindings
-				(id, user_id, provider_id, package_id, door_secret_name)
-			 VALUES ('vault-1', ?, '1password', 'pkg-digest', 'VAULT_DOOR')`,
-		)
-		.bind(t.annOrgId)
-		.run()
+		.run(acmeId)
 
-	const { credentials: items, providers } = await listOrgCredentials({
-		db: t.db,
-		orgId: t.annOrgId,
-		viewerPersonId: t.people.ann.personId,
-		now,
+	const annOrgId = personalOrgId(ann.personId)
+	await saveSecret({
+		env,
+		userId: annOrgId,
+		scope: 'user',
+		name: 'annToken',
+		value: 'ann-value',
+	})
+	const annTokenId = (
+		await findCredentialIdsByLegacyName(db, annOrgId, {
+			type: 'secret',
+			name: 'annToken',
+		})
+	)[0]!
+	await grantPersonalCredentialToOrg({
+		db,
+		ownerPersonId: ann.personId,
+		credentialId: annTokenId,
+		orgId: acmeId,
 	})
 
-	expect(JSON.stringify(items)).not.toMatch(/never-shown/)
-	expect(
-		items.map(({ kind, name, scope, status }) => ({
-			kind,
-			name,
-			scope,
-			status,
-		})),
-	).toEqual([
-		{ kind: 'mcp', name: 'docs', scope: 'personal', status: 'disabled' },
-		{
-			kind: 'mcp',
-			name: 'linear',
-			scope: 'personal',
-			status: 'needs_attention',
-		},
-		{ kind: 'secret', name: 'OPENAI_API_KEY', scope: 'personal', status: 'ok' },
-		{
-			kind: 'secret',
-			name: 'SLACK_WEBHOOK_TOKEN',
-			scope: 'personal',
-			status: 'ok',
-		},
-		{
-			kind: 'secret',
-			name: 'STAGING_TOKEN',
-			scope: 'personal',
-			status: 'expired',
-		},
+	const requestAs = (
+		who: typeof ann,
+		role: OrgRole,
+		scopes: Array<string> | null = null,
+	) =>
+		deriveRequestContext({
+			user: { userId: who.personId },
+			source: scopes
+				? { kind: 'api-token', tokenId: 'token-1' }
+				: { kind: 'session' },
+			orgBinding: { org: { id: acmeId, slug: 'quillworks-co' }, role },
+			scopes: scopes as never,
+		})
+	const stripeKeyId = (
+		await findCredentialIdsByLegacyName(db, acmeId, {
+			type: 'secret',
+			name: 'stripeKey',
+		})
+	)[0]!
+	const grantToAnn = (credentialId: string, permissions: Array<string>) => {
+		const insertPermission = sqlite.prepare(
+			`INSERT INTO grant_permissions (grant_id, permission) VALUES (?, ?)`,
+		)
+		for (const permission of permissions) {
+			insertPermission.run(`grant-${credentialId}`, permission)
+		}
+		sqlite
+			.prepare(
+				`INSERT INTO grants (id, org_id, resource_type, resource_id, subject_type,
+				   subject_id, preset, created_by_user_id, created_at, updated_at)
+				 VALUES (?, ?, 'credential', ?, 'user', ?, 'use', ?, ?, ?)`,
+			)
+			.run(
+				`grant-${credentialId}`,
+				acmeId,
+				credentialId,
+				ann.personId,
+				bea.personId,
+				now,
+				now,
+			)
+		sqlite
+			.prepare(`UPDATE orgs SET access_epoch = access_epoch + 1 WHERE id = ?`)
+			.run(acmeId)
+	}
+	return { env, ann, bea, annTokenId, stripeKeyId, requestAs, grantToAnn }
+}
+
+const summary = (items: Array<CredentialListItem>) =>
+	items.map((item) => `${item.scope}:${item.kind}:${item.name}`)
+
+test('lists Keys, OAuth integrations, and MCP servers as one shape', async () => {
+	const t = await setup()
+	const beaItems = await listCredentialsForViewer({
+		env: t.env,
+		request: t.requestAs(t.bea, 'owner'),
+	})
+	expect(summary(beaItems)).toEqual([
+		'org:oauth:github',
+		'org:mcp:linear',
+		'org:secret:packageToken',
+		'org:secret:stripeKey',
 	])
-	expect(items.find((item) => item.name === 'OPENAI_API_KEY')).toMatchObject({
-		id: openAiId,
-		description: 'Model calls',
-		hosts: ['api.openai.com'],
-		inject: { kind: 'header', name: 'Authorization', format: 'Bearer {value}' },
+	const byName = Object.fromEntries(beaItems.map((item) => [item.name, item]))
+	expect(byName.stripeKey).toMatchObject({
+		description: 'Stripe billing',
+		hosts: ['api.stripe.com'],
 		packageId: null,
-		lockedToPackageIds: ['pkg-triage'],
+		status: 'ok',
 		mcp: null,
 	})
-	expect(
-		items.find((item) => item.name === 'SLACK_WEBHOOK_TOKEN'),
-	).toMatchObject({ packageId: 'pkg-digest', lockedToPackageIds: [] })
-	expect(items.find((item) => item.name === 'docs')).toMatchObject({
-		hosts: ['docs.example.com'],
-		inject: null,
-		lockedToPackageIds: ['pkg-triage'],
-		mcp: { url: 'https://docs.example.com/mcp', enabled: false },
+	expect(byName.packageToken).toMatchObject({ packageId: 'pkg-1' })
+	expect(byName.github).toMatchObject({
+		provider: 'github',
+		hosts: ['api.github.com'],
+		inject: { kind: 'header', name: 'Authorization', format: 'Bearer {value}' },
+		status: 'ok',
 	})
-	expect(items.find((item) => item.name === 'linear')).toMatchObject({
-		statusMessage: 'Token refresh failed',
+	expect(byName.linear).toMatchObject({
+		hosts: ['mcp.linear.app'],
+		status: 'needs_attention',
 		mcp: { url: 'https://mcp.linear.app/sse', enabled: true },
 	})
-	expect(providers).toEqual([
-		{
-			id: 'vault-1',
-			providerId: '1password',
-			provider: null,
-			packageId: 'pkg-digest',
-			doorSecretName: 'VAULT_DOOR',
-			updatedAt: expect.any(String),
-		},
+	expect(JSON.stringify(beaItems)).not.toMatch(/sk-value|ann-value|pkg-value/)
+})
+
+test('a member sees the org credentials granted to them plus their own granted personal ones', async () => {
+	const t = await setup()
+	const annItems = () =>
+		listCredentialsForViewer({
+			env: t.env,
+			request: t.requestAs(t.ann, 'member'),
+		})
+	expect(summary(await annItems())).toEqual(['personal:secret:annToken'])
+	expect((await annItems())[0]).toMatchObject({ id: t.annTokenId })
+	t.grantToAnn(t.stripeKeyId, ['secret:use'])
+	t.grantToAnn('i-github', ['integration:use', 'integration:read'])
+	expect(summary(await annItems())).toEqual([
+		'personal:secret:annToken',
+		'org:oauth:github',
+		'org:secret:stripeKey',
 	])
 })
 
-test('a team org lists its own credentials plus only the viewer’s granted personal ones', async () => {
+test('a scoped token without secret Use drops personal Keys', async () => {
 	const t = await setup()
-	await saveSecret({
+	const items = await listCredentialsForViewer({
 		env: t.env,
-		userId: t.acmeId,
-		scope: 'user',
-		name: 'ACME_DEPLOY_KEY',
-		value: 'acme-never-shown',
+		request: t.requestAs(t.ann, 'member', [
+			'secret:use',
+			'integration:read',
+			'integration:use',
+		]),
 	})
-	for (const name of ['annGranted', 'annPrivate']) {
-		await saveSecret({
-			env: t.env,
-			userId: t.annOrgId,
-			scope: 'user',
-			name,
-			value: `${name}-never-shown`,
-		})
-	}
-	await grantPersonalCredentialToOrg({
-		db: t.db,
-		ownerPersonId: t.people.ann.personId,
-		credentialId: await secretId(t.db, t.annOrgId, 'annGranted'),
-		orgId: t.acmeId,
+	expect(summary(items)).toContain('personal:secret:annToken')
+	const withoutSecretUse = await listCredentialsForViewer({
+		env: t.env,
+		request: t.requestAs(t.ann, 'member', ['secret:read', 'integration:read']),
 	})
-	const list = async (viewer: 'ann' | 'bea') =>
-		(
-			await listOrgCredentials({
-				db: t.db,
-				orgId: t.acmeId,
-				viewerPersonId: t.people[viewer].personId,
-				now,
-			})
-		).credentials
+	expect(summary(withoutSecretUse)).not.toContain('personal:secret:annToken')
+})
 
-	const annView = await list('ann')
-	expect(JSON.stringify(annView)).not.toMatch(/never-shown/)
-	expect(annView.map(({ name, scope }) => ({ name, scope }))).toEqual([
-		{ name: 'ACME_DEPLOY_KEY', scope: 'org' },
-		{ name: 'annGranted', scope: 'personal' },
+test('filters by text, kind, scope, package scope, and package lock', async () => {
+	const t = await setup()
+	const items = [
+		...(await listCredentialsForViewer({
+			env: t.env,
+			request: t.requestAs(t.bea, 'owner'),
+		})),
+		...(await listCredentialsForViewer({
+			env: t.env,
+			request: t.requestAs(t.ann, 'member'),
+		})),
+	]
+	const names = (filtered: Array<CredentialListItem>) =>
+		filtered.map((item) => item.name)
+	expect(names(filterCredentialList(items, { q: 'STRIPE' }))).toEqual([
+		'stripeKey',
 	])
-	// Another member never sees Ann's grant.
-	expect((await list('bea')).map((item) => item.name)).toEqual([
-		'ACME_DEPLOY_KEY',
+	expect(names(filterCredentialList(items, { q: 'linear.app' }))).toEqual([
+		'linear',
 	])
+	expect(
+		names(filterCredentialList(items, { kinds: ['mcp', 'oauth'] })),
+	).toEqual(['github', 'linear'])
+	expect(names(filterCredentialList(items, { scope: 'personal' }))).toEqual([
+		'annToken',
+	])
+	expect(names(filterCredentialList(items, { packageScoped: true }))).toEqual([
+		'packageToken',
+	])
+	expect(filterCredentialList(items, { locked: true })).toEqual([])
+	const locked = items.map((item) =>
+		item.name === 'github' ? { ...item, lockedToPackageIds: ['pkg-2'] } : item,
+	)
+	expect(names(filterCredentialList(locked, { locked: 'pkg-2' }))).toEqual([
+		'github',
+	])
+	expect(names(filterCredentialList(locked, { locked: 'pkg-3' }))).toEqual([])
+})
+
+test('reads list filters from a query string', () => {
+	expect(
+		readCredentialListFilters(
+			new URLSearchParams(
+				'q=+stripe+&kind=secret&kind=bogus&kind=mcp&scope=org&packageScoped=false&locked=pkg-1',
+			),
+		),
+	).toEqual({
+		q: 'stripe',
+		kinds: ['secret', 'mcp'],
+		scope: 'org',
+		packageScoped: false,
+		locked: 'pkg-1',
+	})
+	expect(
+		readCredentialListFilters(new URLSearchParams('scope=x&locked=true')),
+	).toEqual({ locked: true })
+	expect(readCredentialListFilters(new URLSearchParams(''))).toEqual({})
 })

@@ -144,6 +144,7 @@ test('usage reports how each package need relates to the credential', async () =
 			env,
 			request: {} as RequestContext,
 			orgId: 'org-1',
+			ownedByViewer: false,
 			credential,
 			packages: [pkg('triage'), pkg('digest'), pkg('broken', 'broken')],
 		})
@@ -182,13 +183,14 @@ test('usage checks a bounded number of packages and says so', async () => {
 		env,
 		request: {} as RequestContext,
 		orgId: 'org-1',
+		ownedByViewer: false,
 		credential: item({ id: 'a', name: 'A' }),
 		packages,
 	})
 	expect(detail.usageTruncated).toBe(true)
 })
 
-test('a personal credential lists the team orgs it is granted to', async () => {
+test("the viewer's own credential lists the team orgs it is granted to", async () => {
 	const { sqlite, env } = setup()
 	sqlite.exec(`
 		INSERT INTO orgs (id, slug, display_name, created_at, updated_at)
@@ -199,16 +201,17 @@ test('a personal credential lists the team orgs it is granted to', async () => {
 		VALUES ('mine', 'ann', 'org-acme', '2026-10-05T00:00:00.000Z'),
 			('mine', 'ann', 'org-gone', '2026-10-05T00:00:00.000Z');
 	`)
-	const load = (scope: CredentialListItem['scope']) =>
+	const load = (ownedByViewer: boolean) =>
 		loadCredentialDetail({
 			env,
 			request: {} as RequestContext,
 			orgId: 'ann-org',
-			credential: item({ id: 'mine', name: 'mine', scope }),
+			ownedByViewer,
+			credential: item({ id: 'mine', name: 'mine' }),
 			packages: [],
 		})
-	expect((await load('personal')).grants).toEqual([
+	expect((await load(true)).grants).toEqual([
 		{ orgSlug: 'acme', orgName: 'Acme', grantedAt: '2026-10-05T00:00:00.000Z' },
 	])
-	expect((await load('org')).grants).toEqual([])
+	expect((await load(false)).grants).toEqual([])
 })
