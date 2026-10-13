@@ -4,7 +4,7 @@ import { readAuthenticatedAppUser } from '#app/authenticated-user.ts'
 import { requireAuthenticatedPageUser } from '#app/page-auth.ts'
 import { renderAppPage } from '#app/ssr-render.tsx'
 import { jsonResponse } from '#worker/json-response.ts'
-import { parseCredentialListQuery } from '#universal/credentials-list.ts'
+import { readCredentialListFilters } from '#universal/credentials-list.ts'
 import { type routes } from '#universal/routes.ts'
 
 /** `/@slug/-/credentials`: every credential the org holds, in one list. */
@@ -28,11 +28,18 @@ export function createAccountCredentialsHandler(env: Env) {
 	}
 }
 
-/** `/account/credentials.json`: metadata only, never a value. */
+/**
+ * `GET /account/credentials.json`: the request org's credentials list as
+ * `CredentialListItem`s, plus what the website page needs. A fetch from an
+ * `/@slug/-/…` page binds that org. Metadata only, never a value.
+ */
 export function createAccountCredentialsApiHandler(env: Env) {
 	return {
 		middleware: [],
 		async handler({ request }) {
+			if (request.method !== 'GET') {
+				return jsonResponse({ ok: false, error: 'Method not allowed.' }, 405)
+			}
 			const user = await readAuthenticatedAppUser(request, env)
 			if (!user) {
 				return jsonResponse({ ok: false, error: 'Unauthorized.' }, 401)
@@ -41,7 +48,7 @@ export function createAccountCredentialsApiHandler(env: Env) {
 				await loadAccountCredentialsData({
 					env,
 					user,
-					filters: parseCredentialListQuery(new URL(request.url).searchParams),
+					filters: readCredentialListFilters(new URL(request.url).searchParams),
 				}),
 			)
 		},

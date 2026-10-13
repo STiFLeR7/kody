@@ -26,7 +26,6 @@ export const fetchCapableCredentialKinds = [
 	'secret',
 	'oauth',
 	'login',
-	'url',
 ] as const satisfies ReadonlyArray<CredentialKind>
 
 export const credentialScopes = ['org', 'personal'] as const
@@ -285,7 +284,7 @@ const createLinkKnownParams = new Set([
 	'provider',
 	'description',
 	'allowedHosts',
-	'package',
+	'forPackage',
 	'need',
 ])
 
@@ -314,7 +313,7 @@ export function buildCredentialCreateHref(
 		.map((host) => host.trim())
 		.filter(Boolean)
 	if (hosts.length > 0) params.set('allowedHosts', hosts.join(','))
-	set('package', input.packageKodyId)
+	set('forPackage', input.packageKodyId)
 	set('need', input.needKey)
 	for (const [key, value] of Object.entries(input.extra ?? {})) {
 		if (createLinkKnownParams.has(key)) continue
@@ -366,7 +365,7 @@ export function parseCredentialCreateQuery(
 			.flatMap((value) => value.split(','))
 			.map((host) => host.trim())
 			.filter(Boolean),
-		packageKodyId: trimmed(search.get('package')),
+		packageKodyId: trimmed(search.get('forPackage')),
 		needKey: trimmed(search.get('need')),
 		passthrough,
 	}
@@ -374,7 +373,9 @@ export function parseCredentialCreateQuery(
 
 /**
  * Where `/connect/credential` sends a visit until the one-pager ships: the
- * existing page for the kind, with the same query.
+ * existing page for the kind, with the same query. No existing form creates
+ * `url`, `login`, or `signing`, so those land on the Secrets list instead of
+ * a form that would save the wrong kind.
  */
 export function credentialCreateInterimHref(input: {
 	search: URLSearchParams
@@ -388,12 +389,15 @@ export function credentialCreateInterimHref(input: {
 			return withQuery('/connect/oauth')
 		case 'mcp':
 			return input.orgSlug
-				? `/@${encodeURIComponent(input.orgSlug)}/-/mcp-servers`
-				: '/account'
-		case 'secret':
+				? withQuery(`/@${encodeURIComponent(input.orgSlug)}/-/mcp-servers`)
+				: withQuery('/account')
 		case 'url':
 		case 'login':
 		case 'signing':
+			return input.orgSlug
+				? `/@${encodeURIComponent(input.orgSlug)}/-/secrets`
+				: '/account'
+		case 'secret':
 		case null:
 			return withQuery('/connect/secret-set')
 		default: {
@@ -417,33 +421,59 @@ function credentialApprovalPath(input: {
 	return `/@${encodeURIComponent(input.username)}/${encodeURIComponent(input.kodyId)}/approve-credentials`
 }
 
+const reservedPickPrefix = /^(org|personal|id|name):/
+
 function formatCredentialPick(pick: CredentialPick): string {
 	if ('id' in pick) return `id:${pick.id}`
-	return pick.scope ? `${pick.scope}:${pick.name}` : pick.name
+	if (pick.scope) return `${pick.scope}:${pick.name}`
+	return reservedPickPrefix.test(pick.name) ? `name:${pick.name}` : pick.name
 }
 
+/**
+ * `work`, `org:work`, `personal:work`, `id:<id>`, or `name:<name>` for a name
+ * that itself starts with one of those prefixes. Null when it is not a pick.
+ */
 export function parseCredentialPick(value: string): CredentialPick | null {
 	const text = value.trim()
 	if (!text) return null
-	const colon = text.indexOf(':')
-	if (colon > 0) {
-		const prefix = text.slice(0, colon)
-		const rest = text.slice(colon + 1).trim()
-		if (prefix === 'id') return rest ? { id: rest } : null
-		if (prefix === 'org' || prefix === 'personal') {
-			return rest ? { name: rest, scope: prefix } : null
-		}
+	const prefix = reservedPickPrefix.exec(text)?.[1]
+	if (!prefix) return { name: text }
+	const rest = text.slice(prefix.length + 1).trim()
+	if (!rest) return null
+	switch (prefix) {
+		case 'id':
+			return { id: rest }
+		case 'org':
+		case 'personal':
+			return { name: rest, scope: prefix }
+		default:
+			return { name: rest }
 	}
-	return { name: text }
+}
+
+/** `%`, `[`, and `]` inside a bracket segment survive query decoding. */
+function encodeBracketSegment(value: string) {
+	return value
+		.replaceAll('%', '%25')
+		.replaceAll('[', '%5B')
+		.replaceAll(']', '%5D')
+}
+
+function decodeBracketSegment(value: string) {
+	try {
+		return decodeURIComponent(value)
+	} catch {
+		return value
+	}
 }
 
 function proposalParamName(change: CredentialMappingChange): string {
 	const { target } = change
 	switch (target.type) {
 		case 'default':
-			return `${target.layer === 'org' ? 'default' : 'mine'}[${change.needKey}]`
+			return `${target.layer === 'org' ? 'default' : 'mine'}[${encodeBracketSegment(change.needKey)}]`
 		case 'trigger':
-			return `trigger[${target.trigger.kind}:${target.trigger.name}][${change.needKey}]`
+			return `trigger[${target.trigger.kind}:${encodeBracketSegment(target.trigger.name)}][${encodeBracketSegment(change.needKey)}]`
 		default: {
 			const exhaustive: never = target
 			throw new Error(`Unhandled mapping target: ${String(exhaustive)}`)
@@ -502,7 +532,7 @@ function parseProposalParamName(
 		const [, layer, needKey] = defaultMatch
 		return {
 			target: { type: 'default', layer: layer === 'default' ? 'org' : 'mine' },
-			needKey: needKey!.trim(),
+			needKey: decodeBracketSegment(needKey!).trim(),
 		}
 	}
 	const triggerMatch = triggerParamPattern.exec(name)
@@ -513,10 +543,10 @@ function parseProposalParamName(
 				type: 'trigger',
 				trigger: {
 					kind: kind as CredentialTriggerKind,
-					name: triggerName!.trim(),
+					name: decodeBracketSegment(triggerName!).trim(),
 				},
 			},
-			needKey: needKey!.trim(),
+			needKey: decodeBracketSegment(needKey!).trim(),
 		}
 	}
 	return null
@@ -524,15 +554,22 @@ function parseProposalParamName(
 
 /**
  * Reads a proposal from the approval page's query. Values for one param
- * accumulate in order; a lone empty value maps the need to `[]`. Params that
- * look like mapping params but do not parse are reported, other params are
- * ignored.
+ * accumulate in order; only a lone empty value maps the need to `[]`. A value
+ * that is not a pick, or an empty value beside others, is an error and drops
+ * that param's change. Params that look like mapping params but do not parse
+ * are reported; other params are ignored.
  */
 export function parseCredentialApprovalQuery(
 	search: URLSearchParams,
 ): ParsedCredentialProposal {
 	const errors: Array<string> = []
-	const byParam = new Map<string, CredentialMappingProposalChange>()
+	const byParam = new Map<
+		string,
+		{
+			change: Omit<CredentialMappingProposalChange, 'credentials'>
+			values: Array<string>
+		}
+	>()
 	let valueCount = 0
 	for (const [name, value] of search) {
 		if (name === 'reason') continue
@@ -550,10 +587,34 @@ export function parseCredentialApprovalQuery(
 			continue
 		}
 		valueCount += 1
-		const change = byParam.get(name) ?? { ...parsed, credentials: [] }
-		byParam.set(name, change)
-		const pick = parseCredentialPick(value)
-		if (pick) change.credentials.push(pick)
+		const entry = byParam.get(name) ?? { change: parsed, values: [] }
+		entry.values.push(value)
+		byParam.set(name, entry)
+	}
+	const changes: Array<CredentialMappingProposalChange> = []
+	for (const [name, { change, values }] of byParam) {
+		if (values.length === 1 && !values[0]!.trim()) {
+			changes.push({ ...change, credentials: [] })
+			continue
+		}
+		const credentials: Array<CredentialPick> = []
+		const invalid: Array<string> = []
+		for (const value of values) {
+			const pick = parseCredentialPick(value)
+			if (pick) credentials.push(pick)
+			else invalid.push(value)
+		}
+		if (invalid.length > 0) {
+			errors.push(
+				invalid.some((value) => !value.trim())
+					? `"${name}" mixes an empty value (none on purpose) with credentials.`
+					: `"${name}" has a value that is not a credential pick: ${invalid
+							.map((value) => JSON.stringify(value))
+							.join(', ')}.`,
+			)
+			continue
+		}
+		changes.push({ ...change, credentials })
 	}
 	if (valueCount > maxCredentialProposalValues) {
 		return {
@@ -566,7 +627,7 @@ export function parseCredentialApprovalQuery(
 	}
 	const reason = trimmed(search.get('reason'))
 	return {
-		changes: [...byParam.values()],
+		changes,
 		reason: reason ? reason.slice(0, maxCredentialProposalReasonLength) : null,
 		errors,
 	}

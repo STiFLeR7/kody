@@ -11,14 +11,14 @@ import {
 } from '#universal/credential-contracts.ts'
 import {
 	type AccountCredentialsResponse,
-	parseCredentialListQuery,
+	readCredentialListFilters,
 	writeCredentialListQuery,
 } from '#universal/credentials-list.ts'
 import { orgResourcePath } from '#universal/org-pages.ts'
 import { routes } from '#universal/routes.ts'
 
-export function readCredentialListFilters(href: string) {
-	return parseCredentialListQuery(
+export function readCredentialListFiltersFromHref(href: string) {
+	return readCredentialListFilters(
 		new URL(href, 'http://localhost').searchParams,
 	)
 }

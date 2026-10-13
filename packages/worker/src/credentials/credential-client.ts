@@ -264,6 +264,7 @@ async function createUrlForNeed(
 		description: input.need?.description,
 		packageKodyId: input.packageKodyId,
 		needKey: input.need ? input.key : null,
+		extra: builtInOauth && providerSlug ? { platform: providerSlug } : {},
 	})
 }
 
@@ -292,11 +293,34 @@ async function assertNamedAllowed(ctx: CredentialClientContext) {
 	}
 }
 
+/**
+ * No page creates these kinds yet, so the creation link lands on the
+ * Secrets list; the agent can create one with secretSet instead.
+ */
+function secretSetHint(kind: PackageCredentialKind | null, provider: string) {
+	switch (kind) {
+		case 'url':
+		case 'login':
+		case 'signing':
+			return `To create it, call secretSet with kind "${kind}" and provider "${provider}".`
+		case 'secret':
+		case 'oauth':
+		case 'mcp':
+		case null:
+			return null
+		default: {
+			const exhaustive: never = kind
+			throw new Error(`Unhandled credential kind: ${String(exhaustive)}`)
+		}
+	}
+}
+
 async function pickOne(input: {
 	key: string | null
 	candidates: Array<UsableCredential>
 	possibleMatches: Array<UsableCredential>
 	describe: string
+	hint?: string | null
 	createUrl: () => Promise<string>
 }) {
 	const [only, second] = input.candidates
@@ -308,7 +332,7 @@ async function pickOne(input: {
 				input.possibleMatches.length > 0
 					? ' Some of the same kind have no provider; pick one by name, or set its provider with credentialUpdate so it resolves on its own.'
 					: ''
-			}`,
+			}${input.hint ? ` ${input.hint}` : ''}`,
 			{
 				retryWith: input.possibleMatches.map((match) =>
 					retryFor(input.key, match),
@@ -383,6 +407,7 @@ export async function openCredentialClient(
 			describe: kind
 				? `need "${key}" (${kind} from provider "${provider}")`
 				: `provider "${provider}"`,
+			hint: secretSetHint(kind, provider),
 			createUrl: () =>
 				createUrlForNeed(ctx, { key: key!, provider, need, packageKodyId }),
 		})

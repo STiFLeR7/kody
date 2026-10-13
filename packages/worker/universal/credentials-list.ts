@@ -76,30 +76,24 @@ export type AccountCredentialsResponse = CredentialListResponse & {
 	packages: Array<{ id: string; kodyId: string; name: string }>
 }
 
-function readBoolean(value: string | null) {
-	if (value === 'true') return true
-	if (value === 'false') return false
-	return undefined
-}
-
-/** `?q=&kind=&scope=&packageScoped=&locked=`; unknown values are ignored. */
-export function parseCredentialListQuery(
-	params: URLSearchParams,
+/** Reads list filters from a query string (`kind` may repeat). */
+export function readCredentialListFilters(
+	search: URLSearchParams,
 ): CredentialListFilters {
-	const q = params.get('q')?.trim() ?? ''
-	const kinds = [
-		...new Set(params.getAll('kind').filter((kind) => isCredentialKind(kind))),
-	]
-	const scope = params.get('scope')
-	const packageScoped = readBoolean(params.get('packageScoped'))
-	const locked = params.get('locked')?.trim() ?? ''
-	return {
-		...(q ? { q } : {}),
-		...(kinds.length > 0 ? { kinds } : {}),
-		...(scope === 'org' || scope === 'personal' ? { scope } : {}),
-		...(packageScoped === undefined ? {} : { packageScoped }),
-		...(locked ? { locked: locked === 'true' ? true : locked } : {}),
-	}
+	const filters: CredentialListFilters = {}
+	const q = search.get('q')?.trim()
+	if (q) filters.q = q
+	const kinds = search.getAll('kind').filter(isCredentialKind)
+	if (kinds.length > 0) filters.kinds = kinds
+	const scope = search.get('scope')
+	if (scope === 'org' || scope === 'personal') filters.scope = scope
+	const packageScoped = search.get('packageScoped')
+	if (packageScoped === 'true') filters.packageScoped = true
+	if (packageScoped === 'false') filters.packageScoped = false
+	const locked = search.get('locked')?.trim()
+	if (locked === 'true') filters.locked = true
+	else if (locked && locked !== 'false') filters.locked = locked
+	return filters
 }
 
 /** Writes `filters` into `params`, replacing every filter key. */
@@ -119,42 +113,40 @@ export function writeCredentialListQuery(
 	if (filters.locked !== undefined) params.set('locked', String(filters.locked))
 }
 
-/**
- * `locked: <package id>` keeps credentials locked to that package and its
- * package-scoped Keys, the same set as a package's Credentials tab.
- */
-export function filterCredentialListItems(
-	credentials: ReadonlyArray<CredentialListItem>,
+function matchesQuery(item: CredentialListItem, query: string) {
+	const needle = query.toLowerCase()
+	return [item.name, item.provider ?? '', item.description, ...item.hosts].some(
+		(field) => field.toLowerCase().includes(needle),
+	)
+}
+
+/** Applies the list filters; the page filters live with the same rules. */
+export function filterCredentialList(
+	items: ReadonlyArray<CredentialListItem>,
 	filters: CredentialListFilters,
-) {
-	const query = filters.q?.toLowerCase() ?? ''
-	return credentials.filter((credential) => {
-		if (filters.kinds?.length && !filters.kinds.includes(credential.kind)) {
+): Array<CredentialListItem> {
+	const query = filters.q?.trim() ?? ''
+	return items.filter((item) => {
+		if (query && !matchesQuery(item, query)) return false
+		if (filters.kinds?.length && !filters.kinds.includes(item.kind)) {
 			return false
 		}
-		if (filters.scope && credential.scope !== filters.scope) return false
+		if (filters.scope && item.scope !== filters.scope) return false
 		if (
 			filters.packageScoped !== undefined &&
-			(credential.packageId !== null) !== filters.packageScoped
+			(item.packageId !== null) !== filters.packageScoped
 		) {
 			return false
 		}
-		if (filters.locked === true && credential.lockedToPackageIds.length === 0) {
+		if (filters.locked === true && item.lockedToPackageIds.length === 0) {
 			return false
 		}
 		if (
 			typeof filters.locked === 'string' &&
-			credential.packageId !== filters.locked &&
-			!credential.lockedToPackageIds.includes(filters.locked)
+			!item.lockedToPackageIds.includes(filters.locked)
 		) {
 			return false
 		}
-		if (!query) return true
-		return [
-			credential.name,
-			credential.provider ?? '',
-			credential.description,
-			...credential.hosts,
-		].some((text) => text.toLowerCase().includes(query))
+		return true
 	})
 }
