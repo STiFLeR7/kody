@@ -313,8 +313,22 @@ export type PackageCredentialsView = {
 `POST { changes: Array<CredentialMappingChange> }` applies edits made directly
 on the website (a person editing a tab) and returns the updated
 `PackageCredentialsView`. It uses the same validator and writer as Approve and
-is atomic: every change applies, or none does (`400 { ok: false, errors }`).
-This endpoint is session-only; MCP and API tokens cannot reach it.
+is atomic: every change applies, or none does. This endpoint is session-only;
+MCP and API tokens cannot reach it.
+
+- `:username` is the org slug. The viewer must belong to the org (or hold a
+  grant in it) and have `package:execute` on the package; otherwise `404`.
+- A malformed body (not 1–64 changes of the shape above) is
+  `400 { ok: false, error }`.
+- Changes that cannot apply are `400 PackageCredentialsWriteFailure`:
+  `{ ok: false, errors: Array<{ needKey, target, code, message, createUrl? }> }`
+  with the approval error codes. Nothing is written.
+- `409 { ok: false, error }` when a trigger was turned on by someone else
+  between reading and writing (webhooks).
+- A webhook another person enabled shows `enablement.enabledByYou: false`,
+  `canEdit: false`, and no `mappings` (its overrides are theirs).
+- `incomplete` lists the default per need, plus each trigger the viewer has
+  turned on (a trigger that is off never runs).
 
 Who can write:
 

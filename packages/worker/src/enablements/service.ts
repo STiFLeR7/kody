@@ -26,6 +26,7 @@ import {
 } from '#worker/webhooks/repo.ts'
 import { mintPackageOwnedWebhookHmacCiphertext } from '#worker/webhooks/signing-secret.ts'
 import {
+	buildInsertEnablementStatement,
 	disableEnablement,
 	getEnablementById,
 	insertEnablement,
@@ -33,6 +34,22 @@ import {
 	listEnablementsForOrg,
 } from './repo.ts'
 import { type EnablementRecord, type EnablementTriggerKind } from './types.ts'
+
+export type TriggerEnablementErrorCode =
+	| 'trigger_unknown'
+	| 'webhook_not_minted'
+	| 'webhook_other_enabler'
+
+/** A trigger the caller cannot turn on, with a code mapping surfaces can show. */
+export class TriggerEnablementError extends McpCallerError {
+	readonly code: TriggerEnablementErrorCode
+
+	constructor(code: TriggerEnablementErrorCode, message: string) {
+		super(message)
+		this.name = 'TriggerEnablementError'
+		this.code = code
+	}
+}
 
 function requireActor(request: RequestContext) {
 	if (!request.actor) {
@@ -87,7 +104,8 @@ async function resolveDeclaredTrigger(input: {
 		sourceId: savedPackage.sourceId,
 	})
 	const notDeclared = (where: string) =>
-		new McpCallerError(
+		new TriggerEnablementError(
+			'trigger_unknown',
 			`Package "${savedPackage.kodyId}" does not declare ${input.kind} "${name}" in package.json#kody.${where}.`,
 		)
 	switch (input.kind) {
@@ -119,7 +137,8 @@ async function resolveDeclaredTrigger(input: {
 				webhookName: name,
 			})
 			if (!endpoint) {
-				throw new McpCallerError(
+				throw new TriggerEnablementError(
+					'webhook_not_minted',
 					`Webhook "${name}" has no URL yet. Mint one with webhookUrlMint, which also turns it on for you.`,
 				)
 			}
@@ -145,33 +164,103 @@ async function resolveDeclaredTrigger(input: {
 	}
 }
 
+export type DeclaredTrigger = {
+	kind: EnablementTriggerKind
+	name: string
+	/** Job id, package id, or webhook endpoint id; null for an unminted webhook. */
+	instanceId: string | null
+	/** Enablements of this instance that are not off, oldest first. */
+	enablements: Array<EnablementRecord>
+}
+
+/** Every trigger the package declares, with each instance's live enablements. */
+export async function listDeclaredTriggers(input: {
+	env: Env
+	baseUrl: string
+	savedPackage: SavedPackageRecord
+}): Promise<Array<DeclaredTrigger>> {
+	const { savedPackage } = input
+	const db = input.env.APP_DB
+	const orgId = savedPackage.userId
+	const { manifest } = await loadPackageManifestBySourceId({
+		env: input.env,
+		baseUrl: input.baseUrl,
+		userId: savedPackage.userId,
+		sourceId: savedPackage.sourceId,
+	})
+	const declared: Array<Omit<DeclaredTrigger, 'enablements'>> = [
+		...Object.keys(manifest.kody.jobs ?? {}).map((name) => ({
+			kind: 'cron' as const,
+			name,
+			instanceId: buildPackageJobId(savedPackage.id, name),
+		})),
+		...listPackageSubscriptions(manifest).map((subscription) => ({
+			kind: 'subscription' as const,
+			name: subscription.topic,
+			instanceId: savedPackage.id,
+		})),
+		...(await Promise.all(
+			listPackageWebhooks(manifest).map(async (webhook) => ({
+				kind: 'webhook' as const,
+				name: webhook.name,
+				instanceId:
+					(
+						await getWebhookEndpointByKey({
+							db,
+							userId: orgId,
+							packageId: savedPackage.id,
+							webhookName: webhook.name,
+						})
+					)?.id ?? null,
+			})),
+		)),
+	]
+	return await Promise.all(
+		declared.map(async (trigger) => ({
+			...trigger,
+			enablements: trigger.instanceId
+				? await listEnablementsForInstance({
+						db,
+						orgId,
+						triggerKind: trigger.kind,
+						instanceId: trigger.instanceId,
+						...(trigger.kind === 'subscription'
+							? { triggerName: trigger.name }
+							: {}),
+					})
+				: [],
+		})),
+	)
+}
+
+export type TriggerEnablementPlan =
+	| { enablement: EnablementRecord }
+	| {
+			enablement: null
+			enablementId: string
+			/** Inserts the caller's enablement; run it in the caller's batch. */
+			statement: D1PreparedStatement
+			/** Side effects that must land before the insert commits. */
+			prepare: () => Promise<void>
+	  }
+
 /**
- * Turn a declared trigger on for the caller. The caller needs
- * `package:execute` on the package, and every run then acts as them.
+ * What turning a declared trigger on for the caller takes, without writing
+ * the enablement: the caller's existing enablement (or the webhook's), or an
+ * insert to batch with related writes. The caller has already been
+ * authorized for `package:execute` on `savedPackage`.
  */
-export async function enableTriggerForCaller(input: {
+export async function planTriggerEnablementForCaller(input: {
 	env: Env
 	baseUrl: string
 	request: RequestContext
-	packageIdOrKodyId: string
+	savedPackage: SavedPackageRecord
 	kind: EnablementTriggerKind
 	name: string
-}): Promise<EnablementRecord> {
+	now?: string
+}): Promise<TriggerEnablementPlan> {
 	const actor = requireActor(input.request)
-	const savedPackage = await resolveOrgPackage({
-		db: input.env.APP_DB,
-		request: input.request,
-		packageIdOrKodyId: input.packageIdOrKodyId,
-	})
-	await authorize(
-		{ env: input.env, request: input.request },
-		'package:execute',
-		packageResource({
-			id: savedPackage.id,
-			userId: savedPackage.userId,
-			label: savedPackage.kodyId,
-		}),
-	)
+	const { savedPackage } = input
 	const trigger = await resolveDeclaredTrigger({
 		env: input.env,
 		baseUrl: input.baseUrl,
@@ -186,13 +275,15 @@ export async function enableTriggerForCaller(input: {
 		webhookEnabler &&
 		String(webhookEnabler.enablerUserId) !== String(actor.userId)
 	) {
-		throw new McpCallerError(
+		throw new TriggerEnablementError(
+			'webhook_other_enabler',
 			`Webhook "${trigger.triggerName}" is already on for another person. Each webhook URL runs as one enabler.`,
 		)
 	}
 	// Keeps every enabled URL holding a signing secret, so requiring
 	// X-Kody-Signature later would not need a re-mint. Ingress does not check it.
-	if (trigger.unsignedWebhookEndpointId) {
+	const prepare = async () => {
+		if (!trigger.unsignedWebhookEndpointId) return
 		const { encrypted } = await mintPackageOwnedWebhookHmacCiphertext({
 			env: input.env,
 			userId: orgId,
@@ -205,7 +296,10 @@ export async function enableTriggerForCaller(input: {
 			hmacSecretEncrypted: encrypted,
 		})
 	}
-	if (webhookEnabler) return webhookEnabler
+	if (webhookEnabler) {
+		await prepare()
+		return { enablement: webhookEnabler }
+	}
 	const ownExisting = (
 		await listEnablementsForInstance({
 			db,
@@ -217,8 +311,8 @@ export async function enableTriggerForCaller(input: {
 				: {}),
 		})
 	).find((row) => String(row.enablerUserId) === String(actor.userId))
-	if (ownExisting) return ownExisting
-	return await insertEnablement({
+	if (ownExisting) return { enablement: ownExisting }
+	const { id, statement } = buildInsertEnablementStatement({
 		db,
 		enablement: {
 			orgId,
@@ -229,7 +323,56 @@ export async function enableTriggerForCaller(input: {
 			enablerUserId: actor.userId,
 			origin: 'enabled',
 		},
+		now: input.now ?? new Date().toISOString(),
 	})
+	return { enablement: null, enablementId: id, statement, prepare }
+}
+
+/**
+ * Turn a declared trigger on for the caller. The caller needs
+ * `package:execute` on the package, and every run then acts as them.
+ */
+export async function enableTriggerForCaller(input: {
+	env: Env
+	baseUrl: string
+	request: RequestContext
+	packageIdOrKodyId: string
+	kind: EnablementTriggerKind
+	name: string
+}): Promise<EnablementRecord> {
+	requireActor(input.request)
+	const savedPackage = await resolveOrgPackage({
+		db: input.env.APP_DB,
+		request: input.request,
+		packageIdOrKodyId: input.packageIdOrKodyId,
+	})
+	await authorize(
+		{ env: input.env, request: input.request },
+		'package:execute',
+		packageResource({
+			id: savedPackage.id,
+			userId: savedPackage.userId,
+			label: savedPackage.kodyId,
+		}),
+	)
+	const plan = await planTriggerEnablementForCaller({
+		env: input.env,
+		baseUrl: input.baseUrl,
+		request: input.request,
+		savedPackage,
+		kind: input.kind,
+		name: input.name,
+	})
+	if (plan.enablement) return plan.enablement
+	await plan.prepare()
+	await plan.statement.run()
+	const created = await getEnablementById({
+		db: input.env.APP_DB,
+		orgId: savedPackage.userId,
+		id: plan.enablementId,
+	})
+	if (!created) throw new Error('Unable to read the new enablement.')
+	return created
 }
 
 /**

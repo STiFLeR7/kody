@@ -196,6 +196,20 @@ export type PackageCredentialsView = {
 	incomplete: Array<PackageCredentialsIncomplete>
 }
 
+/** One change POST credentials.json refused; nothing was written. */
+export type PackageCredentialsWriteError = {
+	needKey: string
+	target: CredentialMappingTarget
+	code: CredentialApprovalErrorCode
+	message: string
+	createUrl?: string
+}
+
+export type PackageCredentialsWriteFailure = {
+	ok: false
+	errors: Array<PackageCredentialsWriteError>
+}
+
 export const credentialApprovalErrorCodes = [
 	'need_unknown',
 	'trigger_unknown',

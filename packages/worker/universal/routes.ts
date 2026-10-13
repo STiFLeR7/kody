@@ -301,6 +301,13 @@ export const routes = route({
 	communityPackageWebhooksApiPost: post(
 		'/profiles/:username/packages/:kodyId/webhooks.json',
 	),
+	// Package Credentials / Default mappings / Triggers tabs: GET the view,
+	// POST mapping changes. Session-only; 404 without package:execute.
+	communityPackageCredentialsApi:
+		'/profiles/:username/packages/:kodyId/credentials.json',
+	communityPackageCredentialsApiPost: post(
+		'/profiles/:username/packages/:kodyId/credentials.json',
+	),
 	profileApi: '/profiles/:username.json',
 	// `.` is a Remix route delimiter, so the filename must be `:hash.:ext`
 	// (not a single `:cacheKey`) or `/avatar/abc.jpg` never matches.

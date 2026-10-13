@@ -290,3 +290,18 @@ export function resolveNeedCandidates(
 		possibleMatches,
 	}
 }
+
+/**
+ * The credentials that auto-resolve a need: its provider, and its kind when
+ * the need declares one (ADR 0068 resolution rule 3).
+ */
+export function needCandidates(
+	usable: ReadonlyArray<UsableCredential>,
+	need: { kind: PackageCredentialKind | null; provider: string },
+): Array<UsableCredential> {
+	return usable.filter(
+		(credential) =>
+			credential.provider === need.provider &&
+			(need.kind === null || credential.kind === need.kind),
+	)
+}

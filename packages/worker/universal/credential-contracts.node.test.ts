@@ -9,6 +9,8 @@ import {
 	type EffectiveCredentialMappingStatus,
 	type PackageCredentialNeedView,
 	type PackageCredentialsIncomplete,
+	type PackageCredentialsWriteError,
+	type PackageCredentialsWriteFailure,
 	type PackageTriggerView,
 	type StoredCredentialMapping,
 	type CredentialApprovalView,
@@ -468,6 +470,17 @@ test('each view part is addressable on its own', () => {
 		status: 'unbound',
 	}
 	const change: CredentialApprovalChangeView = sampleApproval.changes[0]!
+	const writeError: PackageCredentialsWriteError = {
+		needKey: 'github',
+		target: change.target,
+		code: 'need_unknown',
+		message: 'No such need.',
+	}
+	const failure: PackageCredentialsWriteFailure = {
+		ok: false,
+		errors: [writeError],
+	}
+	expect(failure.errors[0]?.code).toBe('need_unknown')
 	expect([
 		stored?.credentials[0]?.name,
 		status,

@@ -18,11 +18,11 @@ import { type RequestContext } from '@kody-internal/shared/request-context.ts'
 import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { McpCallerError } from '#mcp/caller-error.ts'
 import { AuthorizationError } from '#worker/authorization/authorize.ts'
-import { getDiscoverablePlatformOauthApp } from '#worker/integrations/platform-apps.ts'
 import { getSavedPackageById } from '#worker/package-registry/repo.ts'
 import { type PackageCredentialKind } from '#worker/package-registry/types.ts'
 import { enablementIdOf } from '#worker/request-context/request-context.ts'
 import { buildCredentialCreateUrl } from '#universal/credential-contracts.ts'
+import { buildNeedCreateUrl } from './need-create-url.ts'
 import {
 	CredentialClientHandleError,
 	signCredentialClientHandle,
@@ -31,6 +31,7 @@ import {
 import {
 	findCredentialById,
 	listUsableCredentials,
+	needCandidates,
 	type UsableCredential,
 } from './credential-candidates.ts'
 import {
@@ -235,45 +236,6 @@ async function loadNeed(ctx: CredentialClientContext, key: string) {
 	}
 }
 
-const providerSlugPattern = /^[a-z0-9-]+$/
-
-/**
- * The creation link for an unbound need. A declared kind is locked; without
- * one the page suggests OAuth when a built-in app exists for the provider,
- * else a Key, and shows the kind chooser.
- */
-async function createUrlForNeed(
-	ctx: CredentialClientContext,
-	input: {
-		key: string
-		provider: string
-		need: Awaited<ReturnType<typeof loadNeed>>['need']
-		packageKodyId: string | null
-	},
-) {
-	const declaredKind: PackageCredentialKind | null = input.need?.kind ?? null
-	const providerSlug = providerSlugPattern.test(input.provider)
-		? input.provider
-		: null
-	const builtInOauth =
-		!declaredKind && providerSlug
-			? await getDiscoverablePlatformOauthApp({
-					db: ctx.env.APP_DB,
-					slug: providerSlug,
-				}).catch(() => null)
-			: null
-	return buildCredentialCreateUrl(ctx.callerContext.baseUrl, {
-		kind: declaredKind ?? (builtInOauth ? 'oauth' : 'secret'),
-		kindMode: declaredKind ? 'required' : 'hint',
-		name: input.key,
-		provider: providerSlug,
-		description: input.need?.description,
-		packageKodyId: input.packageKodyId,
-		needKey: input.need ? input.key : null,
-		extra: builtInOauth && providerSlug ? { platform: providerSlug } : {},
-	})
-}
-
 /**
  * `credential.named` works only in ad hoc code and in a package of the
  * actor's personal org that is not listed in Community.
@@ -461,7 +423,14 @@ export async function openCredentialClient(
 		const kind = need?.kind ?? null
 		const provider = need?.provider ?? key!
 		const createUrl = () =>
-			createUrlForNeed(ctx, { key: key!, provider, need, packageKodyId })
+			buildNeedCreateUrl({
+				db: ctx.env.APP_DB,
+				baseUrl: ctx.callerContext.baseUrl,
+				key: key!,
+				provider,
+				need,
+				packageKodyId,
+			})
 		const mapped = await resolveMappedNeed(ctx, {
 			request,
 			key: key!,
@@ -473,11 +442,7 @@ export async function openCredentialClient(
 			mapped ??
 			(await pickOne({
 				key,
-				candidates: usable.filter(
-					(credential) =>
-						credential.provider === provider &&
-						(kind === null || credential.kind === kind),
-				),
+				candidates: needCandidates(usable, { kind, provider }),
 				possibleMatches: kind
 					? usable.filter(
 							(credential) =>
