@@ -4,6 +4,7 @@ import { readAuthenticatedAppUser } from '#app/authenticated-user.ts'
 import { requireAuthenticatedPageUser } from '#app/page-auth.ts'
 import { renderAppPage } from '#app/ssr-render.tsx'
 import { jsonResponse } from '#worker/json-response.ts'
+import { parseCredentialListQuery } from '#universal/credentials-list.ts'
 import { type routes } from '#universal/routes.ts'
 
 /** `/@slug/-/credentials`: every credential the org holds, in one list. */
@@ -36,7 +37,13 @@ export function createAccountCredentialsApiHandler(env: Env) {
 			if (!user) {
 				return jsonResponse({ ok: false, error: 'Unauthorized.' }, 401)
 			}
-			return jsonResponse(await loadAccountCredentialsData({ env, user }))
+			return jsonResponse(
+				await loadAccountCredentialsData({
+					env,
+					user,
+					filters: parseCredentialListQuery(new URL(request.url).searchParams),
+				}),
+			)
 		},
 	} satisfies Action<typeof routes.accountCredentialsApi>
 }

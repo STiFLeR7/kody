@@ -1,115 +1,85 @@
+import { buildAccountSecretPath } from '@kody-internal/shared/account-secret-route.ts'
 import { orgAccountApiReferrer } from '#client/org-account-api.ts'
 import { readJson } from '#client/routes/account-approval-shared.ts'
 import {
 	routeLoaderRedirect,
 	type RouteLoaderResult,
 } from '#client/route-loader.ts'
-import { matchesSearchQuery } from '#client/search-filter.ts'
 import {
-	type AccountCredentialListItem,
-	type AccountCredentialsLoaderData,
-	type CredentialListKind,
-	type CredentialOwner,
-	credentialKindLabel,
-	isCredentialListKind,
+	type CredentialListFilters,
+	type CredentialListItem,
+} from '#universal/credential-contracts.ts'
+import {
+	type AccountCredentialsResponse,
+	parseCredentialListQuery,
+	writeCredentialListQuery,
 } from '#universal/credentials-list.ts'
+import { orgResourcePath } from '#universal/org-pages.ts'
 import { routes } from '#universal/routes.ts'
 
-type CredentialOwnerFilter = 'all' | CredentialOwner
-
-/** `package`: package-scoped values; `locked`: locked to a package. */
-type CredentialPackageFilter = 'all' | 'package' | 'locked'
-
-export type CredentialListFilters = {
-	search: string
-	kind: CredentialListKind | 'all'
-	owner: CredentialOwnerFilter
-	packageFilter: CredentialPackageFilter
-	/** Narrows to one package (its own values and credentials locked to it). */
-	packageId: string
+export function readCredentialListFilters(href: string) {
+	return parseCredentialListQuery(
+		new URL(href, 'http://localhost').searchParams,
+	)
 }
 
-export function readCredentialListFilters(href: string): CredentialListFilters {
-	const params = new URL(href, 'http://localhost').searchParams
-	const kind = params.get('kind')?.trim() ?? ''
-	const owner = params.get('owner')?.trim() ?? ''
-	const packageFilter = params.get('packages')?.trim() ?? ''
-	return {
-		search: params.get('q')?.trim() ?? '',
-		kind: isCredentialListKind(kind) ? kind : 'all',
-		owner: owner === 'org' || owner === 'personal' ? owner : 'all',
-		packageFilter:
-			packageFilter === 'package' || packageFilter === 'locked'
-				? packageFilter
-				: 'all',
-		packageId: params.get('package')?.trim() ?? '',
-	}
-}
-
-/** Writes non-default filters into `href`'s query, dropping the defaults. */
+/** `href` with `filters` as its query, keeping unrelated params. */
 export function writeCredentialListFilters(
 	href: string,
 	filters: CredentialListFilters,
 ) {
 	const url = new URL(href, 'http://localhost')
-	const entries: Array<[string, string, string]> = [
-		['q', filters.search, ''],
-		['kind', filters.kind, 'all'],
-		['owner', filters.owner, 'all'],
-		['packages', filters.packageFilter, 'all'],
-		['package', filters.packageId, ''],
-	]
-	for (const [key, value, fallback] of entries) {
-		if (value && value !== fallback) url.searchParams.set(key, value)
-		else url.searchParams.delete(key)
-	}
+	writeCredentialListQuery(url.searchParams, filters)
 	return `${url.pathname}${url.search}`
 }
 
-export function filterCredentialList(
-	credentials: ReadonlyArray<AccountCredentialListItem>,
-	filters: CredentialListFilters,
-	packagesById: ReadonlyMap<string, { kodyId: string; name: string }>,
+/**
+ * The page that edits `credential` today. Personal credentials granted to a
+ * team org are managed in the viewer's personal org.
+ */
+export function credentialManageHref(
+	credential: CredentialListItem,
+	page: Pick<AccountCredentialsResponse, 'orgSlug' | 'personalOrgSlug'>,
 ) {
-	return credentials.filter((credential) => {
-		if (filters.kind !== 'all' && credential.kind !== filters.kind) {
-			return false
+	const slug =
+		credential.scope === 'personal' && page.personalOrgSlug
+			? page.personalOrgSlug
+			: page.orgSlug
+	switch (credential.kind) {
+		case 'secret':
+		case 'url':
+		case 'login':
+		case 'signing':
+			return orgResourcePath(
+				slug,
+				'secrets',
+				buildAccountSecretPath(
+					credential.packageId
+						? {
+								name: credential.name,
+								scope: 'package',
+								packageId: credential.packageId,
+							}
+						: { name: credential.name, scope: 'user' },
+				).replace(/^\/account\/secrets\/?/, ''),
+			)
+		case 'oauth':
+			return orgResourcePath(
+				slug,
+				'integrations',
+				encodeURIComponent(credential.name),
+			)
+		case 'mcp':
+			return orgResourcePath(
+				slug,
+				'mcp-servers',
+				encodeURIComponent(credential.id),
+			)
+		default: {
+			const exhaustive: never = credential.kind
+			return exhaustive
 		}
-		if (filters.owner !== 'all' && credential.owner !== filters.owner) {
-			return false
-		}
-		if (filters.packageFilter === 'package' && !credential.packageId) {
-			return false
-		}
-		if (
-			filters.packageFilter === 'locked' &&
-			credential.lockedPackageIds.length === 0
-		) {
-			return false
-		}
-		if (
-			filters.packageId &&
-			credential.packageId !== filters.packageId &&
-			!credential.lockedPackageIds.includes(filters.packageId)
-		) {
-			return false
-		}
-		const packageNames = [
-			credential.packageId,
-			...credential.lockedPackageIds,
-		].flatMap((id) => {
-			const meta = id ? packagesById.get(id) : null
-			return meta ? [meta.kodyId, meta.name] : []
-		})
-		return matchesSearchQuery(filters.search, [
-			credential.name,
-			credential.description,
-			credential.provider ?? '',
-			credentialKindLabel(credential.kind),
-			...credential.hosts,
-			...packageNames,
-		])
-	})
+	}
 }
 
 const accountCredentialsApiPath = routes.accountCredentialsApi.href()
@@ -126,7 +96,7 @@ export async function fetchAccountCredentials(
 		signal,
 	})
 	if (response.status === 401) return null
-	const payload = await readJson<AccountCredentialsLoaderData>(response)
+	const payload = await readJson<AccountCredentialsResponse>(response)
 	if (!response.ok || !payload?.ok) {
 		throw new Error('Unable to load credentials.')
 	}

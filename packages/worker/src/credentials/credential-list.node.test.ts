@@ -14,7 +14,7 @@ import { testStableUserIdFromEmail } from '#worker/test-support/stable-user-id.t
 import { createInMemoryUserMeterEnv } from '#worker/test-support/user-meter.ts'
 import { saveSecret } from '#mcp/secrets/service.ts'
 import { findCredentialIdsByLegacyName } from './credential-ids.ts'
-import { listOrgCredentialsForPage } from './credential-list.ts'
+import { listOrgCredentials } from './credential-list.ts'
 import { grantPersonalCredentialToOrg } from './personal-credentials.ts'
 
 const now = new Date('2026-10-11T00:00:00.000Z')
@@ -128,6 +128,13 @@ test('a personal org lists every kind as personal metadata, never values', async
 		.run()
 	await t.db
 		.prepare(
+			`INSERT INTO mcp_server_settings (id, user_id, name, url, last_error)
+			 VALUES ('mcp-linear', ?, 'linear', 'https://mcp.linear.app/sse', 'Token refresh failed')`,
+		)
+		.bind(t.annOrgId)
+		.run()
+	await t.db
+		.prepare(
 			`INSERT INTO saved_packages (id, user_id, name, kody_id, description, source_id)
 			 VALUES ('pkg-digest', ?, 'digest', 'digest', 'pkg', 'source-digest')`,
 		)
@@ -142,42 +149,40 @@ test('a personal org lists every kind as personal metadata, never values', async
 		.bind(t.annOrgId)
 		.run()
 
-	const items = await listOrgCredentialsForPage({
+	const { credentials: items, providers } = await listOrgCredentials({
 		db: t.db,
 		orgId: t.annOrgId,
-		orgSlug: 'ann',
 		viewerPersonId: t.people.ann.personId,
-		viewerPersonalOrgSlug: 'ann',
 		now,
 	})
 
 	expect(JSON.stringify(items)).not.toMatch(/never-shown/)
 	expect(
-		items.map(({ kind, name, owner, status }) => ({
+		items.map(({ kind, name, scope, status }) => ({
 			kind,
 			name,
-			owner,
+			scope,
 			status,
 		})),
 	).toEqual([
-		{ kind: 'vault', name: '1password', owner: 'personal', status: 'ready' },
-		{ kind: 'mcp', name: 'docs', owner: 'personal', status: 'disabled' },
+		{ kind: 'mcp', name: 'docs', scope: 'personal', status: 'disabled' },
 		{
-			kind: 'secret',
-			name: 'OPENAI_API_KEY',
-			owner: 'personal',
-			status: 'ready',
+			kind: 'mcp',
+			name: 'linear',
+			scope: 'personal',
+			status: 'needs_attention',
 		},
+		{ kind: 'secret', name: 'OPENAI_API_KEY', scope: 'personal', status: 'ok' },
 		{
 			kind: 'secret',
 			name: 'SLACK_WEBHOOK_TOKEN',
-			owner: 'personal',
-			status: 'ready',
+			scope: 'personal',
+			status: 'ok',
 		},
 		{
 			kind: 'secret',
 			name: 'STAGING_TOKEN',
-			owner: 'personal',
+			scope: 'personal',
 			status: 'expired',
 		},
 	])
@@ -185,22 +190,34 @@ test('a personal org lists every kind as personal metadata, never values', async
 		id: openAiId,
 		description: 'Model calls',
 		hosts: ['api.openai.com'],
+		inject: { kind: 'header', name: 'Authorization', format: 'Bearer {value}' },
 		packageId: null,
-		lockedPackageIds: ['pkg-triage'],
-		manageHref: '/@ann/-/secrets/user/OPENAI_API_KEY',
+		lockedToPackageIds: ['pkg-triage'],
+		mcp: null,
 	})
 	expect(
 		items.find((item) => item.name === 'SLACK_WEBHOOK_TOKEN'),
-	).toMatchObject({ packageId: 'pkg-digest', lockedPackageIds: [] })
-	expect(items.find((item) => item.kind === 'mcp')).toMatchObject({
+	).toMatchObject({ packageId: 'pkg-digest', lockedToPackageIds: [] })
+	expect(items.find((item) => item.name === 'docs')).toMatchObject({
 		hosts: ['docs.example.com'],
-		lockedPackageIds: ['pkg-triage'],
-		manageHref: '/@ann/-/mcp-servers/mcp-docs',
+		inject: null,
+		lockedToPackageIds: ['pkg-triage'],
+		mcp: { url: 'https://docs.example.com/mcp', enabled: false },
 	})
-	expect(items.find((item) => item.kind === 'vault')).toMatchObject({
-		packageId: 'pkg-digest',
-		manageHref: '/@ann/-/secret-providers',
+	expect(items.find((item) => item.name === 'linear')).toMatchObject({
+		statusMessage: 'Token refresh failed',
+		mcp: { url: 'https://mcp.linear.app/sse', enabled: true },
 	})
+	expect(providers).toEqual([
+		{
+			id: 'vault-1',
+			providerId: '1password',
+			provider: null,
+			packageId: 'pkg-digest',
+			doorSecretName: 'VAULT_DOOR',
+			updatedAt: expect.any(String),
+		},
+	])
 })
 
 test('a team org lists its own credentials plus only the viewer’s granted personal ones', async () => {
@@ -227,31 +244,21 @@ test('a team org lists its own credentials plus only the viewer’s granted pers
 		credentialId: await secretId(t.db, t.annOrgId, 'annGranted'),
 		orgId: t.acmeId,
 	})
-	const list = (viewer: 'ann' | 'bea') =>
-		listOrgCredentialsForPage({
-			db: t.db,
-			orgId: t.acmeId,
-			orgSlug: 'quillworks-co',
-			viewerPersonId: t.people[viewer].personId,
-			viewerPersonalOrgSlug: viewer,
-			now,
-		})
+	const list = async (viewer: 'ann' | 'bea') =>
+		(
+			await listOrgCredentials({
+				db: t.db,
+				orgId: t.acmeId,
+				viewerPersonId: t.people[viewer].personId,
+				now,
+			})
+		).credentials
 
 	const annView = await list('ann')
 	expect(JSON.stringify(annView)).not.toMatch(/never-shown/)
-	expect(
-		annView.map(({ name, owner, manageHref }) => ({ name, owner, manageHref })),
-	).toEqual([
-		{
-			name: 'ACME_DEPLOY_KEY',
-			owner: 'org',
-			manageHref: '/@quillworks-co/-/secrets/user/ACME_DEPLOY_KEY',
-		},
-		{
-			name: 'annGranted',
-			owner: 'personal',
-			manageHref: '/@ann/-/secrets/user/annGranted',
-		},
+	expect(annView.map(({ name, scope }) => ({ name, scope }))).toEqual([
+		{ name: 'ACME_DEPLOY_KEY', scope: 'org' },
+		{ name: 'annGranted', scope: 'personal' },
 	])
 	// Another member never sees Ann's grant.
 	expect((await list('bea')).map((item) => item.name)).toEqual([

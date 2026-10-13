@@ -1,82 +1,72 @@
 import { expect, test } from 'vitest'
-import { type AccountCredentialListItem } from '#universal/credentials-list.ts'
+import { type CredentialListItem } from '#universal/credential-contracts.ts'
 import {
-	filterCredentialList,
-	readCredentialListFilters,
+	credentialManageHref,
 	writeCredentialListFilters,
 } from './account-credentials-shared.ts'
 
 function credential(
-	overrides: Partial<AccountCredentialListItem> & { id: string; name: string },
-): AccountCredentialListItem {
+	overrides: Partial<CredentialListItem> & { id: string; name: string },
+): CredentialListItem {
 	return {
 		kind: 'secret',
-		description: '',
+		scope: 'org',
 		provider: null,
+		description: '',
 		hosts: [],
-		owner: 'org',
+		inject: null,
 		packageId: null,
-		lockedPackageIds: [],
-		status: 'ready',
+		lockedToPackageIds: [],
 		expiresAt: null,
+		createdAt: '2026-10-11T00:00:00.000Z',
 		updatedAt: '2026-10-11T00:00:00.000Z',
-		manageHref: `/@acme/-/secrets/${overrides.name}`,
+		status: 'ok',
+		statusMessage: null,
+		mcp: null,
 		...overrides,
 	}
 }
 
-const credentials = [
-	credential({ id: 'a', name: 'OPENAI_API_KEY', hosts: ['api.openai.com'] }),
-	credential({ id: 'b', name: 'github', kind: 'oauth', owner: 'personal' }),
-	credential({ id: 'c', name: 'SLACK_TOKEN', packageId: 'pkg-digest' }),
-	credential({
-		id: 'd',
-		name: 'docs',
-		kind: 'mcp',
-		lockedPackageIds: ['pkg-triage'],
-	}),
-]
-const packagesById = new Map([
-	['pkg-digest', { kodyId: 'daily-digest', name: 'Daily digest' }],
-	['pkg-triage', { kodyId: 'github-triage', name: 'GitHub triage' }],
-])
-
-function ids(href: string) {
-	return filterCredentialList(
-		credentials,
-		readCredentialListFilters(href),
-		packagesById,
-	).map((item) => item.id)
-}
-
-test('URL filters narrow the list by kind, owner, package scope, and search', () => {
-	expect(ids('/@acme/-/credentials')).toEqual(['a', 'b', 'c', 'd'])
-	expect(ids('/@acme/-/credentials?kind=oauth')).toEqual(['b'])
-	expect(ids('/@acme/-/credentials?owner=personal')).toEqual(['b'])
-	expect(ids('/@acme/-/credentials?packages=package')).toEqual(['c'])
-	expect(ids('/@acme/-/credentials?packages=locked')).toEqual(['d'])
-	expect(ids('/@acme/-/credentials?package=pkg-triage')).toEqual(['d'])
-	expect(ids('/@acme/-/credentials?q=openai.com')).toEqual(['a'])
-	// Search matches the package a credential belongs or is locked to.
-	expect(ids('/@acme/-/credentials?q=daily-digest')).toEqual(['c'])
-	expect(ids('/@acme/-/credentials?q=MCP')).toEqual(['d'])
-	// Unknown values fall back to showing everything.
-	expect(ids('/@acme/-/credentials?kind=bogus&owner=nobody')).toEqual([
-		'a',
-		'b',
-		'c',
-		'd',
-	])
+test('rows open the page that edits each kind, in the org that owns it', () => {
+	const page = { orgSlug: 'acme', personalOrgSlug: 'ann' }
+	expect(
+		credentialManageHref(credential({ id: 'a', name: 'DEPLOY_KEY' }), page),
+	).toBe('/@acme/-/secrets/user/DEPLOY_KEY')
+	expect(
+		credentialManageHref(
+			credential({ id: 'b', name: 'SLACK', packageId: 'pkg-1' }),
+			page,
+		),
+	).toBe('/@acme/-/secrets/package/pkg-1/SLACK')
+	expect(
+		credentialManageHref(
+			credential({ id: 'c', name: 'work github', kind: 'oauth' }),
+			page,
+		),
+	).toBe('/@acme/-/integrations/work%20github')
+	expect(
+		credentialManageHref(
+			credential({ id: 'mcp-1', name: 'docs', kind: 'mcp' }),
+			page,
+		),
+	).toBe('/@acme/-/mcp-servers/mcp-1')
+	// A personal credential granted to the team org is managed at home.
+	expect(
+		credentialManageHref(
+			credential({ id: 'd', name: 'mine', scope: 'personal' }),
+			page,
+		),
+	).toBe('/@ann/-/secrets/user/mine')
 })
 
-test('writing filters keeps the path and drops defaults', () => {
+test('filters write into the page URL without touching its path', () => {
 	expect(
-		writeCredentialListFilters('/@acme/-/credentials?kind=oauth&x=1', {
-			search: 'git',
-			kind: 'all',
-			owner: 'personal',
-			packageFilter: 'all',
-			packageId: '',
+		writeCredentialListFilters('/@acme/-/credentials?kind=oauth', {
+			q: 'git',
+			scope: 'personal',
 		}),
-	).toBe('/@acme/-/credentials?x=1&q=git&owner=personal')
+	).toBe('/@acme/-/credentials?q=git&scope=personal')
+	expect(writeCredentialListFilters('/@acme/-/credentials?q=x', {})).toBe(
+		'/@acme/-/credentials',
+	)
 })

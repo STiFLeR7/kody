@@ -1,8 +1,10 @@
 /**
- * Every credential an org holds, for the Credentials page (ADR 0068): Key and
- * opt-in stored kinds, OAuth connections, MCP servers, and vault bindings,
- * plus the viewer's own personal credentials granted to a team org. Rows are
- * metadata only; nothing here selects a value, token, or client secret.
+ * Every credential an org holds, as the credentials list contract shapes it
+ * (docs/contributing/contracts/credential-mappings-api.md): Key and opt-in
+ * stored kinds, OAuth connections, and MCP servers, plus the viewer's own
+ * personal credentials granted to a team org. Vault bindings are listed
+ * separately. Rows are metadata only; nothing here selects a value, token,
+ * or client secret.
  */
 import {
 	personalOrgId,
@@ -13,15 +15,15 @@ import {
 	chunkArray,
 	maxD1BoundParameters,
 } from '@kody-internal/shared/chunk.ts'
-import { buildAccountSecretPath } from '@kody-internal/shared/account-secret-route.ts'
 import { getIntegrationAllowedHosts } from '#mcp/execute-modules/integration-host-allowlist.ts'
 import {
-	type AccountCredentialListItem,
-	type CredentialListKind,
-	type CredentialListStatus,
-	type CredentialOwner,
-} from '#universal/credentials-list.ts'
-import { orgResourcePath } from '#universal/org-pages.ts'
+	type CredentialInjectView,
+	type CredentialKind,
+	type CredentialListItem,
+	type CredentialScope,
+} from '#universal/credential-contracts.ts'
+import { type CredentialProviderBindingItem } from '#universal/credentials-list.ts'
+import { credentialInjectSchema } from './credential-fields.ts'
 import { listPersonalCredentialCandidates } from './personal-credentials.ts'
 
 type SecretRow = {
@@ -32,10 +34,12 @@ type SecretRow = {
 	provider: string | null
 	allowed_hosts: string
 	allowed_packages: string
+	inject_json: string
 	scope: 'user' | 'package'
 	binding_key: string
 	expires_at: string | null
 	bucket_expires_at: string | null
+	created_at: string
 	updated_at: string
 }
 
@@ -48,10 +52,12 @@ type IntegrationRow = {
 	required_hosts_json: string
 	app_hosts_json: string | null
 	api_base_url: string | null
+	inject_json: string
 	usage_mode: string
 	allowed_packages_json: string
 	connected_at: string | null
 	auth_failed_at: string | null
+	created_at: string
 	updated_at: string
 }
 
@@ -63,6 +69,8 @@ type McpServerRow = {
 	enabled: number
 	usage_mode: string
 	allowed_packages_json: string
+	last_error: string | null
+	created_at: string
 	updated_at: string
 }
 
@@ -87,11 +95,20 @@ function parseStringList(json: string | null | undefined): Array<string> {
 	}
 }
 
+function parseInject(json: string): CredentialInjectView | null {
+	try {
+		const parsed = credentialInjectSchema.safeParse(JSON.parse(json))
+		return parsed.success ? parsed.data : null
+	} catch {
+		return null
+	}
+}
+
 function idFilter(column: string, ids: ReadonlyArray<string> | null) {
 	return ids ? ` AND ${column} IN (${ids.map(() => '?').join(', ')})` : ''
 }
 
-function storedKind(kind: string): CredentialListKind {
+function storedKind(kind: string): CredentialKind {
 	switch (kind) {
 		case 'url':
 		case 'login':
@@ -115,13 +132,14 @@ async function listSecretRows(
 		.prepare(
 			`SELECT e.id AS id, e.name AS name, e.description AS description,
 				e.kind AS kind, e.provider AS provider, e.allowed_hosts AS allowed_hosts,
-				e.allowed_packages AS allowed_packages, b.scope AS scope,
-				b.binding_key AS binding_key, e.expires_at AS expires_at,
-				b.expires_at AS bucket_expires_at, e.updated_at AS updated_at
+				e.allowed_packages AS allowed_packages, e.inject_json AS inject_json,
+				b.scope AS scope, b.binding_key AS binding_key,
+				e.expires_at AS expires_at, b.expires_at AS bucket_expires_at,
+				e.created_at AS created_at, e.updated_at AS updated_at
 			FROM secret_entries e JOIN secret_buckets b ON b.id = e.bucket_id
 			WHERE b.user_id = ? AND b.scope IN ('user', 'package')
 				AND e.id IS NOT NULL AND e.deleted_at IS NULL AND b.deleted_at IS NULL
-				${ids ? idFilter('e.id', ids) : ''}`,
+				${idFilter('e.id', ids)}`,
 		)
 		.bind(ownerId, ...(ids ?? []))
 		.all<SecretRow>()
@@ -142,9 +160,10 @@ async function listIntegrationRows(
 				p.required_hosts_json AS app_hosts_json,
 				CASE WHEN i.platform_app_slug IS NOT NULL THEN p.api_base_url
 					ELSE a.api_base_url END AS api_base_url,
+				i.inject_json AS inject_json,
 				i.usage_mode AS usage_mode, i.allowed_packages_json AS allowed_packages_json,
 				i.connected_at AS connected_at, i.auth_failed_at AS auth_failed_at,
-				i.updated_at AS updated_at
+				i.created_at AS created_at, i.updated_at AS updated_at
 			FROM user_integrations i
 			LEFT JOIN user_oauth_apps a
 				ON a.user_id = i.user_id AND a.slug = i.app_slug AND a.deleted_at IS NULL
@@ -165,7 +184,7 @@ async function listMcpServerRows(
 	const result = await db
 		.prepare(
 			`SELECT id, name, url, provider, enabled, usage_mode,
-				allowed_packages_json, updated_at
+				allowed_packages_json, last_error, created_at, updated_at
 			FROM mcp_server_settings
 			WHERE user_id = ? AND deleted_at IS NULL${idFilter('id', ids)}`,
 		)
@@ -194,59 +213,63 @@ function hostOf(url: string) {
 	}
 }
 
-type RowContext = {
-	orgSlug: string
-	owner: CredentialOwner
-	now: string
-}
+type RowContext = { scope: CredentialScope; now: string }
 
-function secretItem(
-	row: SecretRow,
-	context: RowContext,
-): AccountCredentialListItem {
+function secretItem(row: SecretRow, context: RowContext): CredentialListItem {
+	const kind = storedKind(row.kind)
 	const packageId = row.scope === 'package' ? row.binding_key : null
 	const expiresAt = row.expires_at ?? row.bucket_expires_at
 	return {
 		id: row.id,
-		kind: storedKind(row.kind),
+		kind,
 		name: row.name,
-		description: row.description,
+		scope: context.scope,
 		provider: row.provider,
+		description: row.description,
 		hosts: parseStringList(row.allowed_hosts),
-		owner: context.owner,
+		// A `url` value is the whole request target and `signing` never leaves
+		// the host, so neither has a placement.
+		inject:
+			kind === 'secret' || kind === 'login'
+				? parseInject(row.inject_json)
+				: null,
 		packageId,
-		lockedPackageIds: packageId ? [] : parseStringList(row.allowed_packages),
-		status: isPast(expiresAt, context.now) ? 'expired' : 'ready',
+		lockedToPackageIds: packageId ? [] : parseStringList(row.allowed_packages),
 		expiresAt,
+		createdAt: row.created_at,
 		updatedAt: row.updated_at,
-		manageHref: orgResourcePath(
-			context.orgSlug,
-			'secrets',
-			buildAccountSecretPath({
-				name: row.name,
-				scope: row.scope,
-				packageId,
-			}).replace(/^\/account\/secrets\/?/, ''),
-		),
+		status: isPast(expiresAt, context.now) ? 'expired' : 'ok',
+		statusMessage: null,
+		mcp: null,
 	}
 }
 
-function integrationStatus(row: IntegrationRow): CredentialListStatus {
-	if (!row.connected_at) return 'not_connected'
-	if (row.auth_failed_at) return 'auth_failed'
-	return 'ready'
+function integrationStatus(
+	row: IntegrationRow,
+): Pick<CredentialListItem, 'status' | 'statusMessage'> {
+	if (!row.connected_at) {
+		return { status: 'needs_attention', statusMessage: 'Not connected yet.' }
+	}
+	if (row.auth_failed_at) {
+		return {
+			status: 'needs_attention',
+			statusMessage: 'The provider rejected the token. Reconnect to fix it.',
+		}
+	}
+	return { status: 'ok', statusMessage: null }
 }
 
 function integrationItem(
 	row: IntegrationRow,
 	context: RowContext,
-): AccountCredentialListItem {
+): CredentialListItem {
 	return {
 		id: row.id,
 		kind: 'oauth',
 		name: row.name,
-		description: row.description,
+		scope: context.scope,
 		provider: row.provider ?? row.app_provider,
+		description: row.description,
 		hosts: getIntegrationAllowedHosts({
 			requiredHosts: [
 				...parseStringList(row.required_hosts_json),
@@ -254,69 +277,64 @@ function integrationItem(
 			],
 			apiBaseUrl: row.api_base_url,
 		}),
-		owner: context.owner,
+		inject: parseInject(row.inject_json),
 		packageId: null,
-		lockedPackageIds:
+		lockedToPackageIds:
 			row.usage_mode === 'packages'
 				? parseStringList(row.allowed_packages_json)
 				: [],
-		status: integrationStatus(row),
 		expiresAt: null,
+		createdAt: row.created_at,
 		updatedAt: row.updated_at,
-		manageHref: orgResourcePath(
-			context.orgSlug,
-			'integrations',
-			encodeURIComponent(row.name),
-		),
+		...integrationStatus(row),
+		mcp: null,
 	}
+}
+
+function mcpServerStatus(
+	row: McpServerRow,
+): Pick<CredentialListItem, 'status' | 'statusMessage'> {
+	if (row.enabled !== 1) return { status: 'disabled', statusMessage: null }
+	if (row.last_error) {
+		return { status: 'needs_attention', statusMessage: row.last_error }
+	}
+	return { status: 'ok', statusMessage: null }
 }
 
 function mcpServerItem(
 	row: McpServerRow,
 	context: RowContext,
-): AccountCredentialListItem {
+): CredentialListItem {
 	return {
 		id: row.id,
 		kind: 'mcp',
 		name: row.name,
-		description: row.url,
+		scope: context.scope,
 		provider: row.provider,
+		description: '',
 		hosts: hostOf(row.url),
-		owner: context.owner,
+		inject: null,
 		packageId: null,
-		lockedPackageIds:
+		lockedToPackageIds:
 			row.usage_mode === 'packages'
 				? parseStringList(row.allowed_packages_json)
 				: [],
-		status: row.enabled === 1 ? 'ready' : 'disabled',
 		expiresAt: null,
+		createdAt: row.created_at,
 		updatedAt: row.updated_at,
-		manageHref: orgResourcePath(
-			context.orgSlug,
-			'mcp-servers',
-			encodeURIComponent(row.id),
-		),
+		...mcpServerStatus(row),
+		mcp: { url: row.url, enabled: row.enabled === 1 },
 	}
 }
 
-function vaultItem(
-	row: VaultRow,
-	context: RowContext,
-): AccountCredentialListItem {
+function vaultItem(row: VaultRow): CredentialProviderBindingItem {
 	return {
 		id: row.id,
-		kind: 'vault',
-		name: row.provider_id,
-		description: `Unlocked with ${row.door_secret_name}`,
-		provider: row.provider ?? row.provider_id,
-		hosts: [],
-		owner: context.owner,
+		providerId: row.provider_id,
+		provider: row.provider,
 		packageId: row.package_id,
-		lockedPackageIds: [],
-		status: 'ready',
-		expiresAt: null,
+		doorSecretName: row.door_secret_name,
 		updatedAt: row.updated_at,
-		manageHref: orgResourcePath(context.orgSlug, 'secret-providers'),
 	}
 }
 
@@ -330,21 +348,18 @@ async function listOwnerCredentials(input: {
 		input.ids === null
 			? [null]
 			: chunkArray([...new Set(input.ids)], maxD1BoundParameters - 1)
-	const items: Array<AccountCredentialListItem> = []
+	const items: Array<CredentialListItem> = []
 	for (const ids of chunks) {
 		if (ids?.length === 0) continue
-		const [secrets, integrations, servers, vaults] = await Promise.all([
+		const [secrets, integrations, servers] = await Promise.all([
 			listSecretRows(input.db, input.ownerId, ids),
 			listIntegrationRows(input.db, input.ownerId, ids),
 			listMcpServerRows(input.db, input.ownerId, ids),
-			// Vault bindings are org configuration and never personal.
-			ids === null ? listVaultRows(input.db, input.ownerId) : [],
 		])
 		items.push(
 			...secrets.map((row) => secretItem(row, input.context)),
 			...integrations.map((row) => integrationItem(row, input.context)),
 			...servers.map((row) => mcpServerItem(row, input.context)),
-			...vaults.map((row) => vaultItem(row, input.context)),
 		)
 	}
 	return items
@@ -352,57 +367,57 @@ async function listOwnerCredentials(input: {
 
 /**
  * The org's credentials and, in a team org, the viewer's own personal
- * credentials granted to it (nobody else's). Sorted by name, then kind.
+ * credentials granted to it (nobody else's), sorted by name, then kind. In a
+ * personal org every credential is the owner's own, so its scope is
+ * `personal`.
  */
-export async function listOrgCredentialsForPage(input: {
+export async function listOrgCredentials(input: {
 	db: D1Database
 	orgId: OwnerId
-	orgSlug: string
 	viewerPersonId: PersonId | null
-	/** Where the viewer's personal credentials are managed. */
-	viewerPersonalOrgSlug: string | null
 	now?: Date
-}): Promise<Array<AccountCredentialListItem>> {
+}): Promise<{
+	credentials: Array<CredentialListItem>
+	providers: Array<CredentialProviderBindingItem>
+}> {
 	const now = (input.now ?? new Date()).toISOString()
 	const viewer = input.viewerPersonId
 	const teamOrg = !viewer || input.orgId !== personalOrgId(viewer)
-	// A personal org's credentials are its owner's personal credentials.
-	const orgItems = await listOwnerCredentials({
-		db: input.db,
-		ownerId: input.orgId,
-		ids: null,
-		context: {
-			orgSlug: input.orgSlug,
-			owner: teamOrg ? 'org' : 'personal',
-			now,
-		},
-	})
-	const personal =
+	const [orgItems, vaults, granted] = await Promise.all([
+		listOwnerCredentials({
+			db: input.db,
+			ownerId: input.orgId,
+			ids: null,
+			context: { scope: teamOrg ? 'org' : 'personal', now },
+		}),
+		listVaultRows(input.db, input.orgId),
 		viewer && teamOrg
-			? await listPersonalCredentialCandidates({
+			? listPersonalCredentialCandidates({
 					db: input.db,
 					actorPersonId: viewer,
 					orgId: input.orgId,
 					now: input.now,
 				})
-			: []
+			: [],
+	])
 	const personalItems =
-		viewer && input.viewerPersonalOrgSlug && personal.length > 0
+		viewer && granted.length > 0
 			? await listOwnerCredentials({
 					db: input.db,
 					ownerId: personalOrgId(viewer),
-					ids: personal.map((credential) => credential.id),
-					context: {
-						orgSlug: input.viewerPersonalOrgSlug,
-						owner: 'personal',
-						now,
-					},
+					ids: granted.map((credential) => credential.id),
+					context: { scope: 'personal', now },
 				})
 			: []
-	return [...orgItems, ...personalItems].sort(
-		(left, right) =>
-			left.name.localeCompare(right.name) ||
-			left.kind.localeCompare(right.kind) ||
-			left.owner.localeCompare(right.owner),
-	)
+	return {
+		credentials: [...orgItems, ...personalItems].sort(
+			(left, right) =>
+				left.name.localeCompare(right.name) ||
+				left.kind.localeCompare(right.kind) ||
+				left.scope.localeCompare(right.scope),
+		),
+		providers: vaults
+			.map(vaultItem)
+			.sort((left, right) => left.providerId.localeCompare(right.providerId)),
+	}
 }

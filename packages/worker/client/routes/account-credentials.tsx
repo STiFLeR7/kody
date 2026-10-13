@@ -6,13 +6,13 @@ import { createRouteData, routeDataRedirect } from '#client/route-data.tsx'
 import { type AccountStatus } from '#client/routes/account-approval-shared.ts'
 import {
 	AccountManagementMessage,
+	AccountManagementPanel,
 	AccountManagementShell,
 	AccountPageHeader,
 } from '#client/routes/account-management-components.tsx'
 import {
-	type CredentialListFilters,
+	credentialManageHref,
 	fetchAccountCredentials,
-	filterCredentialList,
 	readCredentialListFilters,
 	writeCredentialListFilters,
 } from '#client/routes/account-credentials-shared.ts'
@@ -23,11 +23,17 @@ import {
 	recordCellClamp,
 } from '#client/routes/record-table.tsx'
 import {
-	type AccountCredentialListItem,
-	type AccountCredentialsLoaderData,
+	type CredentialListFilters,
+	type CredentialListItem,
+	credentialKinds,
+	isCredentialKind,
+} from '#universal/credential-contracts.ts'
+import {
+	type AccountCredentialsResponse,
+	type CredentialProviderBindingItem,
 	credentialKindLabel,
-	credentialListKinds,
 	credentialStatusLabel,
+	filterCredentialListItems,
 } from '#universal/credentials-list.ts'
 import { orgResourcePath } from '#universal/org-pages.ts'
 import { routes } from '#universal/routes.ts'
@@ -56,18 +62,17 @@ function credentialsDataKey(href: string) {
 	return new URL(href, 'http://localhost').pathname
 }
 
-function ownerLabel(credential: AccountCredentialListItem) {
-	return credential.owner === 'personal' ? 'Personal' : 'Org'
+function scopeLabel(credential: CredentialListItem) {
+	return credential.scope === 'personal' ? 'Personal' : 'Org'
 }
 
-function statusColor(credential: AccountCredentialListItem) {
+function statusColor(credential: CredentialListItem) {
 	switch (credential.status) {
-		case 'ready':
+		case 'ok':
 			return colors.text
 		case 'expired':
-		case 'auth_failed':
+		case 'needs_attention':
 			return colors.error
-		case 'not_connected':
 		case 'disabled':
 			return colors.textMuted
 		default: {
@@ -78,7 +83,7 @@ function statusColor(credential: AccountCredentialListItem) {
 }
 
 /** The kind, with its provider when that adds something. */
-function kindCellLabel(credential: AccountCredentialListItem) {
+function kindCellLabel(credential: CredentialListItem) {
 	const kind = credentialKindLabel(credential.kind)
 	const provider = credential.provider
 	return provider && provider !== credential.name
@@ -93,17 +98,84 @@ function hostsLabel(hosts: ReadonlyArray<string>) {
 }
 
 function packageLabel(
-	credential: AccountCredentialListItem,
+	credential: CredentialListItem,
 	packagesById: ReadonlyMap<string, { kodyId: string }>,
 ) {
 	const name = (id: string) => packagesById.get(id)?.kodyId ?? id
 	if (credential.packageId)
 		return `Package value · ${name(credential.packageId)}`
-	const [first, ...rest] = credential.lockedPackageIds
+	const [first, ...rest] = credential.lockedToPackageIds
 	if (!first) return '—'
 	return rest.length > 0
 		? `Locked to ${name(first)} +${rest.length}`
 		: `Locked to ${name(first)}`
+}
+
+/**
+ * Vault bindings are not a credential kind, so kind, owner, and package-scope
+ * filters hide them; a chosen package keeps the vault it unlocks.
+ */
+function filterProviderBindings(
+	providers: ReadonlyArray<CredentialProviderBindingItem>,
+	filters: CredentialListFilters,
+) {
+	if (
+		filters.kinds?.length ||
+		filters.scope ||
+		filters.packageScoped !== undefined ||
+		filters.locked === true
+	) {
+		return []
+	}
+	const query = filters.q?.toLowerCase() ?? ''
+	return providers.filter(
+		(binding) =>
+			(typeof filters.locked !== 'string' ||
+				binding.packageId === filters.locked) &&
+			(!query ||
+				[binding.providerId, binding.provider ?? ''].some((text) =>
+					text.toLowerCase().includes(query),
+				)),
+	)
+}
+
+const packageScopeOptions = ['any', 'scoped', 'unscoped', 'locked'] as const
+type PackageScopeOption = (typeof packageScopeOptions)[number]
+
+function packageScopeOption(
+	filters: CredentialListFilters,
+): PackageScopeOption {
+	if (filters.packageScoped === true) return 'scoped'
+	if (filters.packageScoped === false) return 'unscoped'
+	if (filters.locked === true) return 'locked'
+	return 'any'
+}
+
+/** Package-scope choice as filters; a chosen package (`locked: id`) stays. */
+function packageScopeFilters(
+	option: PackageScopeOption,
+	current: CredentialListFilters,
+): CredentialListFilters {
+	const lockedPackage =
+		typeof current.locked === 'string' ? current.locked : undefined
+	switch (option) {
+		case 'any':
+			return { ...current, packageScoped: undefined, locked: lockedPackage }
+		case 'scoped':
+			return { ...current, packageScoped: true, locked: lockedPackage }
+		case 'unscoped':
+			return { ...current, packageScoped: false, locked: lockedPackage }
+		case 'locked':
+			return { ...current, packageScoped: undefined, locked: true }
+		default: {
+			const exhaustive: never = option
+			return exhaustive
+		}
+	}
+}
+
+function isPackageScopeOption(value: string): value is PackageScopeOption {
+	return (packageScopeOptions as ReadonlyArray<string>).includes(value)
 }
 
 /**
@@ -112,7 +184,7 @@ function packageLabel(
  * list. Metadata only; values never reach this page.
  */
 export function AccountCredentialsRoute(handle: Handle) {
-	let payload: AccountCredentialsLoaderData | null = null
+	let payload: AccountCredentialsResponse | null = null
 	const credentialsData = createRouteData({
 		key: 'accountCredentials',
 		locationKey: credentialsDataKey,
@@ -122,13 +194,12 @@ export function AccountCredentialsRoute(handle: Handle) {
 		},
 	})
 
-	function updateFilters(next: Partial<CredentialListFilters>) {
+	function updateFilters(
+		next: (current: CredentialListFilters) => CredentialListFilters,
+	) {
 		const href = readCurrentRouterHref(handle)
 		replaceLocation(
-			writeCredentialListFilters(href, {
-				...readCredentialListFilters(href),
-				...next,
-			}),
+			writeCredentialListFilters(href, next(readCredentialListFilters(href))),
 		)
 	}
 
@@ -147,9 +218,15 @@ export function AccountCredentialsRoute(handle: Handle) {
 		const packages = payload?.packages ?? []
 		const packagesById = new Map(packages.map((pkg) => [pkg.id, pkg]))
 		const filters = readCredentialListFilters(currentHref)
-		const shown = filterCredentialList(credentials, filters, packagesById)
+		const shown = filterCredentialListItems(credentials, filters)
 		const orgSlug = payload?.orgSlug ?? ''
 		const teamOrg = payload?.teamOrg ?? false
+		const lockedPackageId =
+			typeof filters.locked === 'string' ? filters.locked : ''
+		const shownProviders = filterProviderBindings(
+			payload?.providers ?? [],
+			filters,
+		)
 		const packageOptions: Array<ComboboxOption> = [
 			{ id: '', label: 'All packages' },
 			...packages.map((pkg) => ({
@@ -217,62 +294,85 @@ export function AccountCredentialsRoute(handle: Handle) {
 							<RecordTableSearch
 								label="Search credentials"
 								placeholder="Search credentials"
-								value={filters.search}
-								onInput={(search) => updateFilters({ search })}
+								value={filters.q ?? ''}
+								onInput={(q) =>
+									updateFilters((current) => ({
+										...current,
+										q: q || undefined,
+									}))
+								}
 							/>
 							<RecordTableSelect
 								label="Filter credentials by kind"
-								value={filters.kind}
+								value={
+									filters.kinds?.length === 1
+										? (filters.kinds[0] ?? 'all')
+										: 'all'
+								}
 								onChange={(value) =>
-									updateFilters({
-										kind: readCredentialListFilters(`?kind=${value}`).kind,
-									})
+									updateFilters((current) => ({
+										...current,
+										kinds: isCredentialKind(value) ? [value] : undefined,
+									}))
 								}
 							>
 								<option value="all">All kinds</option>
-								{credentialListKinds.map((kind) => (
+								{credentialKinds.map((kind) => (
 									<option value={kind}>{credentialKindLabel(kind)}</option>
 								))}
 							</RecordTableSelect>
-							<RecordTableSelect
-								label="Filter credentials by owner"
-								value={filters.owner}
-								onChange={(value) =>
-									updateFilters({
-										owner: readCredentialListFilters(`?owner=${value}`).owner,
-									})
-								}
-							>
-								<option value="all">Org and personal</option>
-								<option value="org">Org</option>
-								<option value="personal">Personal</option>
-							</RecordTableSelect>
+							{teamOrg ? (
+								<RecordTableSelect
+									label="Filter credentials by owner"
+									value={filters.scope ?? 'all'}
+									onChange={(value) =>
+										updateFilters((current) => ({
+											...current,
+											scope:
+												value === 'org' || value === 'personal'
+													? value
+													: undefined,
+										}))
+									}
+								>
+									<option value="all">Org and personal</option>
+									<option value="org">Org</option>
+									<option value="personal">Personal</option>
+								</RecordTableSelect>
+							) : null}
 							<RecordTableSelect
 								label="Filter credentials by package scope"
-								value={filters.packageFilter}
+								value={packageScopeOption(filters)}
 								onChange={(value) =>
-									updateFilters({
-										packageFilter: readCredentialListFilters(
-											`?packages=${value}`,
-										).packageFilter,
-									})
+									updateFilters((current) =>
+										packageScopeFilters(
+											isPackageScopeOption(value) ? value : 'any',
+											current,
+										),
+									)
 								}
 							>
-								<option value="all">Any package scope</option>
-								<option value="package">Package-scoped</option>
+								<option value="any">Any package scope</option>
+								<option value="scoped">Package-scoped keys</option>
+								<option value="unscoped">Not package-scoped</option>
 								<option value="locked">Locked to a package</option>
 							</RecordTableSelect>
 							{packages.length > 0 ? (
 								<span mix={css(packageFilterSlotCss)}>
 									<Combobox
-										key={`credential-package-filter:${filters.packageId}`}
+										key={`credential-package-filter:${lockedPackageId}`}
 										id="credential-package-filter"
 										label="Filter credentials by package"
 										hideLabel
 										placeholder="All packages"
-										value={filters.packageId}
+										value={lockedPackageId}
 										options={packageOptions}
-										onChange={(packageId) => updateFilters({ packageId })}
+										onChange={(packageId) =>
+											updateFilters((current) => ({
+												...current,
+												locked: packageId || undefined,
+											}))
+										}
 									/>
 								</span>
 							) : null}
@@ -289,14 +389,17 @@ export function AccountCredentialsRoute(handle: Handle) {
 						{ key: 'status', label: 'Status' },
 					]}
 					rows={shown.map((credential) => ({
-						id: `${credential.owner}:${credential.id}`,
-						href: credential.manageHref,
+						id: `${credential.scope}:${credential.id}`,
+						href: credentialManageHref(credential, {
+							orgSlug,
+							personalOrgSlug: payload?.personalOrgSlug ?? null,
+						}),
 						cells: {
 							name: <span mix={clampedCellCss}>{credential.name}</span>,
 							kind: (
 								<span mix={clampedCellCss}>{kindCellLabel(credential)}</span>
 							),
-							owner: ownerLabel(credential),
+							owner: scopeLabel(credential),
 							hosts: (
 								<span mix={clampedCellCss}>{hostsLabel(credential.hosts)}</span>
 							),
@@ -306,13 +409,52 @@ export function AccountCredentialsRoute(handle: Handle) {
 								</span>
 							),
 							status: (
-								<span mix={css({ color: statusColor(credential) })}>
+								<span
+									title={credential.statusMessage ?? undefined}
+									mix={css({ color: statusColor(credential) })}
+								>
 									{credentialStatusLabel(credential.status)}
 								</span>
 							),
 						},
 					}))}
 				/>
+
+				{shownProviders.length > 0 ? (
+					<AccountManagementPanel
+						title="Custom secret providers"
+						description="Vaults (like 1Password) that resolve secret references when a run needs them. Each is unlocked by a door secret stored in a package."
+					>
+						<RecordTable
+							mode="none"
+							ariaLabel="Custom secret providers"
+							countLabel={`${shownProviders.length} connected`}
+							columns={[
+								{ key: 'provider', label: 'Secret provider', primary: true },
+								{ key: 'package', label: 'Unlocked by', drop: 1 },
+							]}
+							rows={shownProviders.map((binding) => ({
+								id: binding.id,
+								href: orgResourcePath(orgSlug, 'secret-providers'),
+								cells: {
+									provider: (
+										<span mix={clampedCellCss}>
+											{binding.provider ?? binding.providerId}
+										</span>
+									),
+									package: (
+										<span mix={clampedCellCss}>
+											{`${binding.doorSecretName} in ${
+												packagesById.get(binding.packageId)?.kodyId ??
+												binding.packageId
+											}`}
+										</span>
+									),
+								},
+							}))}
+						/>
+					</AccountManagementPanel>
+				) : null}
 			</AccountManagementShell>
 		)
 	}
