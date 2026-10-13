@@ -1,16 +1,8 @@
 import { type readAuthenticatedAppUser } from '#app/authenticated-user.ts'
 import { getAppBaseUrl } from '#worker/app-base-url.ts'
-import {
-	checkPermission,
-	computeEffectivePermissions,
-	packageResource,
-} from '#worker/authorization/authorize.ts'
-import {
-	loadPackageMappingScope,
-	type PackageMappingScope,
-} from '#worker/credentials/package-credential-mappings.ts'
+import { type PackageMappingScope } from '#worker/credentials/package-credential-mappings.ts'
+import { loadPackageMappingScopeForRequest } from '#worker/credentials/package-mapping-scope-access.ts'
 import { loadOrgBindingForSlug } from '#worker/orgs/repo.ts'
-import { resolveSavedPackage } from '#worker/package-invocations/module-artifacts.ts'
 import { deriveRequestContext } from '#worker/request-context/request-context.ts'
 
 type AppUser = NonNullable<Awaited<ReturnType<typeof readAuthenticatedAppUser>>>
@@ -35,31 +27,14 @@ export async function loadPackageMappingScopeForViewer(input: {
 		input.username,
 	)
 	if (!binding) return null
-	const savedPackage = await resolveSavedPackage({
-		db: env.APP_DB,
-		userId: binding.org.id,
-		packageIdOrKodyId: input.kodyId.trim(),
-	})
-	if (!savedPackage) return null
-	const request = deriveRequestContext({
-		user: user.mcpUser,
-		source: { kind: 'session' },
-		orgBinding: binding,
-	})
-	const access = await computeEffectivePermissions({ env, request })
-	const resource = packageResource({
-		id: savedPackage.id,
-		userId: savedPackage.userId,
-		label: savedPackage.kodyId,
-	})
-	if (!checkPermission(access, 'package:execute', resource).allowed) {
-		return null
-	}
-	return await loadPackageMappingScope({
+	return await loadPackageMappingScopeForRequest({
 		env,
 		baseUrl: getAppBaseUrl({ env, requestUrl: input.request.url }),
-		request,
-		savedPackage,
-		canManage: checkPermission(access, 'package:write', resource).allowed,
+		request: deriveRequestContext({
+			user: user.mcpUser,
+			source: { kind: 'session' },
+			orgBinding: binding,
+		}),
+		packageIdOrKodyId: input.kodyId,
 	})
 }

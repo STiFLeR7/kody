@@ -1,40 +1,16 @@
-import { DatabaseSync } from 'node:sqlite'
-import {
-	ownerIdFromStored,
-	personIdFromStored,
-	type OwnerId,
-} from '@kody-internal/shared/owner-person-ids.ts'
-import { type OrgRole } from '@kody-internal/shared/request-context.ts'
+import { type OwnerId } from '@kody-internal/shared/owner-person-ids.ts'
 import { expect, test, vi } from 'vitest'
 import { loadPackageMappingScopeForViewer } from '#app/package-credentials-access.ts'
-import { saveSecret } from '#mcp/secrets/service.ts'
-import { upsertGrant } from '#worker/orgs/access-writes.ts'
-import { createOrganization } from '#worker/orgs/create-organization.ts'
-import { provisionPersonalOrg } from '#worker/orgs/provision.ts'
 import {
-	getSavedPackageById,
-	insertSavedPackage,
-} from '#worker/package-registry/repo.ts'
-import { deriveRequestContext } from '#worker/request-context/request-context.ts'
-import { applyAllMigrations } from '#worker/test-support/apply-all-migrations.ts'
-import {
-	createAuditTestDb,
-	createTestOrgAuditWriter,
-} from '#worker/test-support/create-audit-db.ts'
-import { createD1FromSqlite } from '#worker/test-support/create-d1-from-sqlite.ts'
-import { testStableUserIdFromEmail } from '#worker/test-support/stable-user-id.ts'
-import { createInMemoryUserMeterEnv } from '#worker/test-support/user-meter.ts'
-import { type CredentialMappingChange } from '#universal/credential-contracts.ts'
-import * as needsClosure from './credential-needs-closure.ts'
-import { type CredentialNeed } from './credential-needs.ts'
-import {
-	resolveMappingChanges,
-	writeMappingChanges,
-} from './package-credential-mapping-changes.ts'
-import {
-	buildPackageCredentialsView,
-	loadPackageMappingScope,
-} from './package-credential-mappings.ts'
+	dailyTarget as daily,
+	mappingFixtureBaseUrl as baseUrl,
+	mappingFixtureNow as now,
+	mineTarget as mine,
+	orgDefaultTarget as orgDefault,
+	setupPackageCredentialMappingFixture,
+} from '#worker/test-support/package-credential-mapping-fixture.ts'
+import { writeMappingChanges } from './package-credential-mapping-changes.ts'
+import { buildPackageCredentialsView } from './package-credential-mappings.ts'
 
 const mocks = vi.hoisted(() => ({ loadPackageManifestBySourceId: vi.fn() }))
 
@@ -42,211 +18,10 @@ vi.mock('#worker/package-registry/source.ts', () => ({
 	loadPackageManifestBySourceId: mocks.loadPackageManifestBySourceId,
 }))
 
-const now = '2026-10-13T00:00:00.000Z'
-const baseUrl = 'https://kody.test'
-
-const needs: Array<CredentialNeed> = [
-	{
-		key: 'mail',
-		kind: 'secret',
-		provider: 'resend',
-		description: 'Send the digest',
-		multiple: false,
-	},
-	{
-		key: 'chat',
-		kind: 'secret',
-		provider: 'slack',
-		description: 'Post the digest',
-		multiple: false,
-	},
-]
-
-async function setup() {
-	const sqlite = new DatabaseSync(':memory:')
-	applyAllMigrations(sqlite, new URL('../../migrations/', import.meta.url))
-	const db = createD1FromSqlite(sqlite)
-	const env = {
-		APP_DB: db,
-		AUDIT_DB: createAuditTestDb(),
-		...createInMemoryUserMeterEnv().env,
-		COOKIE_SECRET: 'test-cookie-secret',
-		SECRET_STORE_KEY: 'test-secret-store-key-32-chars-minimum',
-	} as unknown as Env
-	const people = Object.fromEntries(
-		(['ann', 'bea', 'cy'] as const).map((username) => {
-			const stableUserId = testStableUserIdFromEmail(`${username}@example.com`)
-			return [
-				username,
-				{ stableUserId, personId: personIdFromStored(stableUserId) },
-			]
-		}),
-	) as Record<
-		'ann' | 'bea' | 'cy',
-		{ stableUserId: string; personId: ReturnType<typeof personIdFromStored> }
-	>
-	for (const [username, person] of Object.entries(people)) {
-		await provisionPersonalOrg(db, {
-			stableUserId: person.stableUserId,
-			username,
-			createdAt: now,
-		})
-	}
-	const created = await createOrganization(
-		db,
-		{} as Pick<Env, 'BUNDLE_ARTIFACTS_KV'>,
-		{
-			personId: people.bea.personId,
-			audit: createTestOrgAuditWriter(),
-			slug: 'acme-clients',
-			displayName: 'Acme',
-		},
-	)
-	if (!created.ok) throw new Error(created.error)
-	const acme = await db
-		.prepare(`SELECT id FROM orgs WHERE slug = 'acme-clients'`)
-		.first<{ id: string }>()
-	const acmeId = ownerIdFromStored(acme!.id)
-	await db
-		.prepare(
-			`INSERT INTO org_memberships (org_id, user_id, role, created_at)
-			 VALUES (?, ?, 'member', ?)`,
-		)
-		.bind(acmeId, people.ann.stableUserId, now)
-		.run()
-	const storeKey = async (name: string, provider: string) => {
-		await saveSecret({ env, userId: acmeId, scope: 'user', name, value: 'v' })
-		const row = await db
-			.prepare(
-				`UPDATE secret_entries SET provider = ?, allowed_hosts = '["api.example.com"]'
-				WHERE name = ? AND bucket_id IN (
-					SELECT id FROM secret_buckets WHERE user_id = ? AND scope = 'user'
-				) RETURNING id`,
-			)
-			.bind(provider, name, acmeId)
-			.first<{ id: string }>()
-		return row!.id
-	}
-	const grantUse = async (
-		credentialId: string,
-		person: keyof typeof people,
-	) => {
-		await upsertGrant({
-			db,
-			orgId: acmeId,
-			resourceType: 'credential',
-			resourceId: credentialId,
-			family: 'secret',
-			subject: { type: 'user', id: people[person].stableUserId },
-			preset: 'use',
-			permissions: null,
-			createdByUserId: people.bea.stableUserId,
-			audit: createTestOrgAuditWriter(),
-		})
-		await db
-			.prepare(`UPDATE orgs SET access_epoch = access_epoch + 1 WHERE id = ?`)
-			.bind(acmeId)
-			.run()
-	}
-	const packageId = crypto.randomUUID()
-	await insertSavedPackage(
-		db,
-		{
-			id: packageId,
-			user_id: acmeId,
-			name: '@acme/digest',
-			kody_id: 'digest',
-			description: 'test package',
-			tags_json: '[]',
-			search_text: null,
-			source_id: `source-${packageId}`,
-			has_app: 0,
-			has_skills: 0,
-			hidden: 0,
-			is_private: 1,
-			created_at: now,
-			updated_at: now,
-		},
-		null,
-		{ stamp: false },
-	)
-	const savedPackage = (await getSavedPackageById(db, {
-		userId: acmeId,
-		packageId,
-	}))!
-	mocks.loadPackageManifestBySourceId.mockResolvedValue({
-		manifest: {
-			name: '@acme/digest',
-			kody: {
-				id: 'digest',
-				description: 'digest',
-				jobs: {
-					daily: {
-						entry: './src/job.ts',
-						schedule: { type: 'interval', every: '1d' },
-					},
-				},
-				subscriptions: { 'acme.thing.happened': { handler: './src/h.ts' } },
-				webhooks: [
-					{ name: 'incoming', export: './webhook', responseMode: 'ack' },
-				],
-			},
-		},
+const setup = () =>
+	setupPackageCredentialMappingFixture({
+		loadPackageManifestBySourceId: mocks.loadPackageManifestBySourceId,
 	})
-	vi.spyOn(needsClosure, 'loadPublishedCredentialNeeds').mockResolvedValue(
-		needs,
-	)
-	const requestAs = (person: keyof typeof people, role: OrgRole | null) =>
-		deriveRequestContext({
-			user: { userId: people[person].personId, username: person },
-			source: { kind: 'session' },
-			orgBinding: { org: { id: acmeId, slug: 'acme-clients' }, role },
-		})
-	const scopeFor = (person: keyof typeof people, role: OrgRole) =>
-		loadPackageMappingScope({
-			env,
-			baseUrl,
-			request: requestAs(person, role),
-			savedPackage,
-			canManage: role === 'owner',
-		})
-	const apply = async (
-		person: keyof typeof people,
-		role: OrgRole,
-		changes: Array<CredentialMappingChange>,
-	) => {
-		const scope = await scopeFor(person, role)
-		const resolved = await resolveMappingChanges(scope, changes)
-		if (!resolved.some((change) => change.error)) {
-			await writeMappingChanges(scope, resolved, now)
-		}
-		return resolved
-	}
-	const enablementCount = async () =>
-		(await db
-			.prepare(`SELECT COUNT(*) AS n FROM enablements WHERE package_id = ?`)
-			.bind(packageId)
-			.first<{ n: number }>())!.n
-	return {
-		db,
-		env,
-		people,
-		acmeId,
-		savedPackage,
-		storeKey,
-		grantUse,
-		scopeFor,
-		apply,
-		enablementCount,
-	}
-}
-
-const orgDefault = { type: 'default', layer: 'org' } as const
-const mine = { type: 'default', layer: 'mine' } as const
-const daily = {
-	type: 'trigger',
-	trigger: { kind: 'cron', name: 'daily' },
-} as const
 
 test('the view shows needs, options, triggers, and what is incomplete', async () => {
 	const t = await setup()
@@ -451,22 +226,7 @@ test('the viewer scope binds the :username org and needs package:execute', async
 	expect(owner!.request.org.id).toBe(t.acmeId as OwnerId)
 	// A private package needs a grant before a member can run it.
 	expect(await load('ann', 'acme-clients', 'digest')).toBeNull()
-	await upsertGrant({
-		db: t.db,
-		orgId: t.acmeId,
-		resourceType: 'package',
-		resourceId: t.savedPackage.id,
-		family: 'package',
-		subject: { type: 'user', id: t.people.ann.stableUserId },
-		preset: 'use',
-		permissions: null,
-		createdByUserId: t.people.bea.stableUserId,
-		audit: createTestOrgAuditWriter(),
-	})
-	await t.db
-		.prepare(`UPDATE orgs SET access_epoch = access_epoch + 1 WHERE id = ?`)
-		.bind(t.acmeId)
-		.run()
+	await t.grantPackageUse('ann')
 	const member = await load('ann', 'acme-clients', 'digest')
 	expect(member?.canManage).toBe(false)
 	expect(await load('cy', 'acme-clients', 'digest')).toBeNull()

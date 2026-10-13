@@ -2,6 +2,7 @@ import { type Action } from 'remix/router'
 import { z } from 'zod'
 import { readAuthenticatedAppUser } from '#app/authenticated-user.ts'
 import { loadPackageMappingScopeForViewer } from '#app/package-credentials-access.ts'
+import { credentialPickSchema } from '#worker/credentials/credential-pick-schema.ts'
 import {
 	resolveMappingChanges,
 	writeMappingChanges,
@@ -13,21 +14,12 @@ import {
 import { isMcpCallerError } from '#mcp/caller-error.ts'
 import { jsonResponse } from '#worker/json-response.ts'
 import {
-	credentialScopes,
 	credentialTriggerKinds,
 	maxCredentialProposalValues,
 	type CredentialMappingChange,
 	type PackageCredentialsWriteFailure,
 } from '#universal/credential-contracts.ts'
 import { type routes } from '#universal/routes.ts'
-
-const pickSchema = z.union([
-	z.strictObject({ id: z.string().trim().min(1) }),
-	z.strictObject({
-		name: z.string().trim().min(1),
-		scope: z.enum(credentialScopes).optional(),
-	}),
-])
 
 const changeSchema = z.strictObject({
 	target: z.discriminatedUnion('type', [
@@ -44,7 +36,10 @@ const changeSchema = z.strictObject({
 		}),
 	]),
 	needKey: z.string().trim().min(1),
-	credentials: z.array(pickSchema).max(maxCredentialProposalValues).nullable(),
+	credentials: z
+		.array(credentialPickSchema)
+		.max(maxCredentialProposalValues)
+		.nullable(),
 })
 
 const bodySchema = z.strictObject({

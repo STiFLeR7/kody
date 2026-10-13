@@ -308,6 +308,13 @@ export const routes = route({
 	communityPackageCredentialsApiPost: post(
 		'/profiles/:username/packages/:kodyId/credentials.json',
 	),
+	// Credential approval page data: GET resolves the proposal in the query,
+	// POST `{ action: 'approve', fingerprint }` applies it. Session-only.
+	communityPackageApproveCredentialsApi:
+		'/profiles/:username/packages/:kodyId/approve-credentials.json',
+	communityPackageApproveCredentialsApiPost: post(
+		'/profiles/:username/packages/:kodyId/approve-credentials.json',
+	),
 	profileApi: '/profiles/:username.json',
 	// `.` is a Remix route delimiter, so the filename must be `:hash.:ext`
 	// (not a single `:cacheKey`) or `/avatar/abc.jpg` never matches.

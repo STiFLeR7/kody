@@ -254,6 +254,18 @@ export type CredentialApprovalView = {
 	errors: Array<string>
 }
 
+/** Approve refused; nothing was written. `view` is resolved fresh. */
+export type CredentialApprovalFailure = {
+	ok: false
+	error: string
+	view: CredentialApprovalView
+}
+
+export type CredentialApprovalSuccess = {
+	ok: true
+	view: CredentialApprovalView
+}
+
 export function describeCredentialMappingTarget(
 	target: CredentialMappingTarget,
 ): string {

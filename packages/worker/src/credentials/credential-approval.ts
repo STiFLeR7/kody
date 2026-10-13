@@ -1,0 +1,145 @@
+/**
+ * The approval page's view and Approve (contract: "Mapping proposals and the
+ * approval page"). An agent only proposes mappings; they take effect when a
+ * signed-in person approves exactly what they reviewed. The fingerprint pins
+ * that: the changes resolved to credential ids for this viewer, so a rename,
+ * a replaced credential, or a mapping edited since review fails Approve.
+ */
+import { isMcpCallerError } from '#mcp/caller-error.ts'
+import {
+	type CredentialApprovalView,
+	type ParsedCredentialProposal,
+} from '#universal/credential-contracts.ts'
+import {
+	resolveMappingChanges,
+	writeMappingChanges,
+	type ResolvedMappingChange,
+} from './package-credential-mapping-changes.ts'
+import {
+	loadPackageMappingScope,
+	type PackageMappingScope,
+} from './package-credential-mappings.ts'
+
+async function sha256Hex(text: string) {
+	const digest = await crypto.subtle.digest(
+		'SHA-256',
+		new TextEncoder().encode(text),
+	)
+	return [...new Uint8Array(digest)]
+		.map((byte) => byte.toString(16).padStart(2, '0'))
+		.join('')
+}
+
+function fingerprintOf(
+	scope: PackageMappingScope,
+	proposal: ParsedCredentialProposal,
+	resolved: ReadonlyArray<ResolvedMappingChange>,
+) {
+	return sha256Hex(
+		JSON.stringify({
+			packageId: scope.savedPackage.id,
+			actorId: scope.actorId,
+			reason: proposal.reason,
+			errors: proposal.errors,
+			changes: resolved.map((change) => [
+				change.target,
+				change.needKey,
+				change.before?.map((ref) => ref.id) ?? null,
+				change.after.map((ref) => ref.id),
+				change.willEnable,
+				change.error?.code ?? null,
+			]),
+		}),
+	)
+}
+
+export type ResolvedCredentialApproval = {
+	view: CredentialApprovalView
+	resolved: Array<ResolvedMappingChange>
+}
+
+/** Resolves a proposal for the scope's viewer. Never writes. */
+export async function resolveCredentialApproval(
+	scope: PackageMappingScope,
+	proposal: ParsedCredentialProposal,
+): Promise<ResolvedCredentialApproval> {
+	const resolved = await resolveMappingChanges(scope, proposal.changes)
+	return {
+		resolved,
+		view: {
+			ok: true,
+			package: {
+				id: scope.savedPackage.id,
+				kodyId: scope.savedPackage.kodyId,
+			},
+			reason: proposal.reason,
+			canApprove:
+				proposal.errors.length === 0 &&
+				resolved.length > 0 &&
+				resolved.every((change) => change.error === null),
+			fingerprint: await fingerprintOf(scope, proposal, resolved),
+			changes: resolved.map((change) => ({
+				target: change.target,
+				needKey: change.needKey,
+				need: change.need,
+				before: change.before,
+				after: change.after,
+				willEnable: change.willEnable,
+				error: change.error,
+			})),
+			errors: proposal.errors,
+		},
+	}
+}
+
+export type CredentialApprovalOutcome =
+	| { status: 'approved'; view: CredentialApprovalView }
+	| { status: 'invalid'; view: CredentialApprovalView }
+	| { status: 'stale'; view: CredentialApprovalView }
+	| { status: 'conflict'; message: string; view: CredentialApprovalView }
+
+async function resolveFresh(
+	scope: PackageMappingScope,
+	proposal: ParsedCredentialProposal,
+) {
+	const fresh = await loadPackageMappingScope({
+		env: scope.env,
+		baseUrl: scope.baseUrl,
+		request: scope.request,
+		savedPackage: scope.savedPackage,
+		canManage: scope.canManage,
+	})
+	return (await resolveCredentialApproval(fresh, proposal)).view
+}
+
+/**
+ * Re-resolves the proposal and, when it still matches `fingerprint` and has
+ * no errors, writes every change (and any trigger it turns on) in one batch.
+ * The returned view is resolved again after the write.
+ */
+export async function approveCredentialProposal(input: {
+	scope: PackageMappingScope
+	proposal: ParsedCredentialProposal
+	fingerprint: string
+}): Promise<CredentialApprovalOutcome> {
+	const { scope, proposal } = input
+	const current = await resolveCredentialApproval(scope, proposal)
+	if (!current.view.canApprove) {
+		return { status: 'invalid', view: current.view }
+	}
+	if (current.view.fingerprint !== input.fingerprint) {
+		return { status: 'stale', view: current.view }
+	}
+	try {
+		await writeMappingChanges(scope, current.resolved)
+	} catch (error) {
+		// A trigger someone else turned on between resolve and write.
+		if (!isMcpCallerError(error) || !(error instanceof Error)) throw error
+		return {
+			status: 'conflict',
+			message: error.message,
+			view: await resolveFresh(scope, proposal),
+		}
+	}
+	return { status: 'approved', view: await resolveFresh(scope, proposal) }
+}

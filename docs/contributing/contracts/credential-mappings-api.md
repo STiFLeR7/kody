@@ -439,13 +439,32 @@ export type CredentialApprovalView = {
 }
 ```
 
+```ts
+/** Approve refused; nothing was written. `view` is resolved fresh. */
+export type CredentialApprovalFailure = {
+	ok: false
+	error: string
+	view: CredentialApprovalView
+}
+
+export type CredentialApprovalSuccess = {
+	ok: true
+	view: CredentialApprovalView
+}
+```
+
 - `GET` resolves the proposal for the signed-in viewer and returns
-  `CredentialApprovalView`. It never writes.
-- `POST { action: 'approve', fingerprint }` re-resolves the same query. A
-  different fingerprint (a credential was renamed or replaced, or a mapping
-  changed since review) is `409 { ok: false, error, view }` with the fresh view.
-  Otherwise every change (and any trigger it enables) is written in one batch:
-  `{ ok: true, view }`.
+  `CredentialApprovalView`. It never writes. 401 without a session; 404 when the
+  org or package is not visible or the viewer lacks `package:execute`.
+- `POST { action: 'approve', fingerprint }` re-resolves the same query:
+  - `canApprove` is false now: `400 CredentialApprovalFailure`.
+  - A different fingerprint (a credential was replaced, or a mapping changed
+    since review): `409 CredentialApprovalFailure` with the fresh view. Show it
+    and let the person approve again.
+  - A webhook someone else enabled between review and write:
+    `409 CredentialApprovalFailure`.
+  - Otherwise every change (and any trigger it enables) is written in one batch:
+    `200 CredentialApprovalSuccess`, whose view shows the new `before`.
 - One Approve applies trigger mappings and default mappings together.
 
 ### `credentialMappingPropose` (MCP / Open API)
@@ -470,6 +489,9 @@ Input:
 Output: `{ approvalUrl, view: CredentialApprovalView, message }`. It validates
 as the caller would approve and returns the absolute approval URL to send to the
 person. It never writes. `view.canApprove: false` lists what to fix first.
+
+Open API: `POST /v1/credential-proposals`. Package code cannot call it, and a
+package the caller cannot run is a caller error ("Package not found").
 
 ## Runtime errors
 
