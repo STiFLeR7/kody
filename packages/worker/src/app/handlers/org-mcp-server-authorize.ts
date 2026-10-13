@@ -21,6 +21,7 @@ import {
 } from '#worker/mcp-client/authorize-consent.ts'
 import { createMcpClientHubClient } from '#worker/mcp-client/hub-client.ts'
 import { mcpOAuthAttemptActorFromIds } from '#worker/mcp-client/oauth-attempt.ts'
+import { mcpOAuthAttemptIdentityInvalidMessage } from '#worker/mcp-client/oauth-identity.ts'
 import { getMcpServerSettingById } from '#worker/mcp-client/settings-service.ts'
 import { type McpServerPendingAuthorization } from '#worker/mcp-client/types.ts'
 import { ownerIdFromCaller } from '#worker/request-context/owner-id.ts'
@@ -265,17 +266,46 @@ export function createOrgMcpServerAuthorizePostHandler(env: Env) {
 				ownerOrgId: context.user.request.org.id,
 				personId: context.user.mcpUser.userId,
 			})
-			if (actor) {
-				const hub = createMcpClientHubClient({
-					env,
-					userId: context.user.request.org.id,
+			const bindFailedMessage = mcpOAuthAttemptIdentityInvalidMessage(
+				context.setting.name,
+			)
+			if (!actor) {
+				return respond(
+					{
+						ok: false,
+						error: bindFailedMessage,
+						consent: await buildConsentLoaderData({
+							env,
+							context,
+							error: bindFailedMessage,
+						}),
+					},
+					409,
+				)
+			}
+			const hub = createMcpClientHubClient({
+				env,
+				userId: context.user.request.org.id,
+			})
+			const bound = await hub
+				.bindOAuthAttemptActor({
+					serverId: context.setting.id,
+					actor,
 				})
-				await hub
-					.bindOAuthAttemptActor({
-						serverId: context.setting.id,
-						actor,
-					})
-					.catch(() => ({ ok: false }))
+				.catch(() => ({ ok: false as const }))
+			if (!bound.ok) {
+				return respond(
+					{
+						ok: false,
+						error: bindFailedMessage,
+						consent: await buildConsentLoaderData({
+							env,
+							context,
+							error: bindFailedMessage,
+						}),
+					},
+					409,
+				)
 			}
 			return respond({ ok: true, authorizationUrl: pending.authorizationUrl })
 		},
