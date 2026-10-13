@@ -159,17 +159,17 @@ into are described in
   64). Prefer naming a slot after its provider (`github`, `resend`); publish
   adds an informational note for a key that is not a provider slug
   (`^[a-z0-9-]+$`) and never fails for it.
-- `kind` is optional in the accepted design
+- `kind` is optional
   ([ADR 0068 amendment 2026-10-12](../contributing/decisions/0068-credentials-own-placement-scoped-clients.md#amendment-2026-10-12)):
   omit it for any fetch-capable credential for that provider (Key/secret such as
   a PAT, oauth, login); declare it only when a specific shape is needed
   (`secret`, `oauth`, `mcp`, or the opt-in types `url`, `login`, and `signing`).
-  Implementation of optional `kind` is a follow-up; until then matching still
-  requires `kind`. `provider` is optional and defaults to the key; a second
-  account from the same provider gets its own key with an explicit `provider`.
-  `description` is required, never affects matching, and says why the package
-  wants access. `multiple: true` means the package uses several accounts at
-  once. A typical need looks like
+  When `kind` is omitted, matching accepts any fetch-capable credential for the
+  provider; a declared `kind` keeps today's narrowing. `provider` is optional
+  and defaults to the key; a second account from the same provider gets its own
+  key with an explicit `provider`. `description` is required, never affects
+  matching, and says why the package wants access. `multiple: true` means the
+  package uses several accounts at once. A typical need looks like
   `"github": { "description": "Read PRs to summarize them" }`.
 - Publish rejects any other key or a missing required field and names the slot.
   If a later rule rejects a slot in a version that is already published, the
@@ -178,15 +178,16 @@ into are described in
   the packages it statically imports through `kody:@`, as they were at this
   publish. A key that the package and a dependency declare with a different
   `kind` or `provider` fails the publish and names both; give one a different
-  key.
+  key. Omitting `kind` is compatible with a dependency that declares a
+  fetch-capable kind (the declared kind is kept).
 - `packageGet` returns that closure as `credentials.needs`, each need with how
   it resolves for you: `status` is `ready` (exactly one credential you can Use
-  has the need's kind and provider; `autoPick` names it), `ambiguous` (several
-  do), or `unbound` (none). `yourOptions` lists what you could pick (name, `org`
-  or `personal` scope, hosts): the matches plus same-kind credentials with no
-  provider, which resolve automatically once their provider is set
-  (`credentialUpdate`). Only credentials you can Use are listed, and needs
-  inherited from a dependency carry `from`.
+  matches the need's kind filter and provider; `autoPick` names it), `ambiguous`
+  (several do), or `unbound` (none). `yourOptions` lists what you could pick
+  (name, `org` or `personal` scope, hosts): the matches plus matching-kind
+  credentials with no provider, which resolve automatically once their provider
+  is set (`credentialUpdate`). Only credentials you can Use are listed, and
+  needs inherited from a dependency carry `from`.
 - Slots take no `placement`. Publish rejects one with a message to remove it.
   Published versions that include it load with it ignored. The fetch gateway
   fills `{{secret:NAME}}` and `{{integration-token:NAME}}` anywhere in a request
