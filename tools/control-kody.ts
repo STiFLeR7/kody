@@ -119,6 +119,7 @@ const usageLines = [
 	'  --head-ahead         package-create: push one unpublished commit',
 	'  --code-file <p>      Required for execute (ESM module with default export)',
 	'  --params-file <p>    Optional JSON object passed to execute',
+	'  --execute-args-file <p>  Optional JSON object merged into the execute call (e.g. credentials)',
 	'  --query <text>       search query',
 	'  --domain <id>        Optional search domain',
 	'  --entity <ref>       Optional search entity ref',
@@ -201,6 +202,7 @@ export type ControlKodyOptions = {
 	headAhead: boolean
 	codeFile: string | null
 	paramsFile: string | null
+	executeArgsFile: string | null
 	query: string | null
 	domain: string | null
 	entity: string | null
@@ -267,6 +269,7 @@ export function parseControlArgs(argv: Array<string>): ControlKodyOptions {
 		headAhead: false,
 		codeFile: null,
 		paramsFile: null,
+		executeArgsFile: null,
 		query: null,
 		domain: null,
 		entity: null,
@@ -476,6 +479,14 @@ function parseSharedFlags(
 			}
 			case '--params-file': {
 				options.paramsFile = requireValue(argv[index + 1], '--params-file')
+				index += 1
+				break
+			}
+			case '--execute-args-file': {
+				options.executeArgsFile = requireValue(
+					argv[index + 1],
+					'--execute-args-file',
+				)
 				index += 1
 				break
 			}
@@ -1548,12 +1559,16 @@ async function runCommand(options: ControlKodyOptions) {
 			const params = options.paramsFile
 				? await readJsonObjectFile(options.paramsFile)
 				: undefined
+			const extraArguments = options.executeArgsFile
+				? await readJsonObjectFile(options.executeArgsFile)
+				: undefined
 			const report = await executeAppMcp({
 				origin,
 				email,
 				password: options.password ?? defaults.password,
 				code: readFileSync(options.codeFile, 'utf8'),
 				params,
+				extraArguments,
 				cookieHeader: cached.cookieHeader,
 				oauth: cached.oauth,
 				orgSlug: cached.orgSlug,
