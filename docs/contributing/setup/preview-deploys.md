@@ -146,13 +146,14 @@ example `duplicate column name`). Before each preview `d1 migrations apply`, the
 workflow runs `tools/ci/rewrite-renamed-preview-migrations.ts` (requires
 `CLOUDFLARE_ENV=preview`). It rewrites `d1_migrations` rows whose filename is
 gone but whose SQL sha256 still matches a current file on the branch (historical
-SQL is recovered from git via `commit^:path` when the last touch renamed the
-file; the preview deploy job checks out with `fetch-depth: 0`). It does **not**
-guess from the kebab slug alone — that would skip applying revised SQL after a
-rebase that also changed the migration. The script also refuses any wrangler
-config whose binding `database_name` is not a preview name (`kody-pr-*` /
-`kody-branch-*`). That is bookkeeping only — not a schema drop — and never runs
-in production.
+SQL is recovered from git with `rev-list --full-history` then `commit^:path`
+when the last touch renamed the file — `--full-history` is required on GitHub PR
+merge refs — and multi-hop renumbers still match by content sha; the preview
+deploy job checks out with `fetch-depth: 0`). It does **not** guess from the
+kebab slug alone — that would skip applying revised SQL after a rebase that also
+changed the migration. The script also refuses any wrangler config whose binding
+`database_name` is not a preview name (`kody-pr-*` / `kody-branch-*`). That is
+bookkeeping only — not a schema drop — and never runs in production.
 
 If rewrite cannot match (content changed as well as the name, or git cannot
 recover the old file), use the **reset preview D1** fallback for **PR** preview
