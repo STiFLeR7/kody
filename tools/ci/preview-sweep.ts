@@ -10,13 +10,51 @@ import { cloudflareApiRequest, fail } from './resource-utils.ts'
  * Scheduled sweep for PR previews whose close-time cleanup never ran or
  * failed (#3396). Leftover preview Workers keep their Durable Object
  * namespaces, and the account cap (500) then fails every new preview deploy.
- * Only `kody-pr-<number>*` names whose pull request is closed are swept, and
- * every delete goes through `cleanupPreviewResources`, which applies the
- * preview naming guard (#2024). Branch previews (`kody-branch-*`) have no PR
- * to check and are left alone.
+ * `kody-pr-<number>*` names whose pull request is closed are swept this way.
+ * Every delete goes through `cleanupPreviewResources`, which applies the
+ * preview naming guard (#2024).
+ *
+ * Branch previews (`kody-branch-<slug>*`) have no pull request to check, so
+ * they are swept on worker liveness instead: once the bare `kody-branch-<slug>`
+ * script is gone, its D1/KV/R2 leftovers are orphaned and swept the same way
+ * (#3563).
  */
 
 const prPreviewNamePattern = /^kody-pr-(\d+)(?:-|$)/
+const branchWorkerNamePattern = /^kody-branch-[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+/**
+ * Fixed suffixes `buildPreviewResourceNames`/`listPreviewWorkerNames`
+ * (`preview-resources.ts`) append to a preview worker's base name, longest
+ * first so "-audit-db"/"-jobs-db" strip before the shorter "-db". A branch
+ * slug that happens to end in one of these words (e.g. a branch literally
+ * named `.../my-runtime`) is misread as a suffixed resource of a shorter
+ * base; accepted as a known edge case of free-form slugs, same as
+ * `buildPreviewResourceNames`'s own truncation note.
+ *
+ * Preview queues are excluded: `previewQueueName` (preview-queue-plan.ts) can
+ * hash and truncate the suffix, so it cannot be reversed from the name
+ * alone. A queue-only leftover with no other trace is not detected by this
+ * sweep; #3563 asks for D1/KV/R2, not queues. Mock-server workers
+ * (`-mock-<service>`) are excluded for the same reason (dynamic suffix).
+ */
+const previewDerivedNameSuffixes = [
+	'-audit-db',
+	'-jobs-db',
+	'-bundle-artifacts-kv',
+	'-community-assets',
+	'-repo-session-blobs',
+	'-operator-backups',
+	'-email-blobs',
+	'-highlight',
+	'-platform',
+	'-runtime',
+	'-vectors',
+	'-oauth-kv',
+	'-db',
+	'-api',
+	'-jobs',
+].sort((left, right) => right.length - left.length)
 
 export const previewSweepMaxPerRunDefault = 10
 
@@ -41,6 +79,35 @@ export function collectPreviewPullRequestNumbers(
 	return [...numbers].sort((left, right) => left - right)
 }
 
+/**
+ * Branch previews (`kody-branch-<slug>`) have no pull request to check, so
+ * they are swept on worker liveness instead: the bare `kody-branch-<slug>`
+ * script is the one `listPreviewWorkerNames` deploys as the public entry
+ * (what `.../health` answers), so its absence from the current
+ * `/workers/scripts` listing means the preview is gone and only its D1/KV/R2
+ * leftovers remain (#3563).
+ */
+export function previewBranchWorkerName(name: string): string | null {
+	if (!previewResourceNamePattern.test(name)) return null
+	if (!name.startsWith('kody-branch-')) return null
+	const suffix = previewDerivedNameSuffixes.find((candidate) =>
+		name.endsWith(candidate),
+	)
+	const base = suffix ? name.slice(0, -suffix.length) : name
+	return branchWorkerNamePattern.test(base) ? base : null
+}
+
+export function collectPreviewBranchWorkerNames(
+	names: Iterable<string>,
+): Array<string> {
+	const workerNames = new Set<string>()
+	for (const name of names) {
+		const workerName = previewBranchWorkerName(name)
+		if (workerName !== null) workerNames.add(workerName)
+	}
+	return [...workerNames].sort()
+}
+
 export function planPreviewSweep(input: {
 	pullRequestNumbers: ReadonlyArray<number>
 	states: ReadonlyMap<number, PullRequestState>
@@ -58,6 +125,21 @@ export function planPreviewSweep(input: {
 		unknown: input.pullRequestNumbers.filter(
 			(number) => (input.states.get(number) ?? 'unknown') === 'unknown',
 		),
+	}
+}
+
+export function planBranchPreviewSweep(input: {
+	branchWorkerNames: ReadonlyArray<string>
+	liveNames: ReadonlySet<string>
+	maxPerRun: number
+}) {
+	const orphaned = input.branchWorkerNames.filter(
+		(name) => !input.liveNames.has(name),
+	)
+	return {
+		sweep: orphaned.slice(0, Math.max(0, input.maxPerRun)),
+		deferred: orphaned.slice(Math.max(0, input.maxPerRun)),
+		live: input.branchWorkerNames.filter((name) => input.liveNames.has(name)),
 	}
 }
 
@@ -204,9 +286,9 @@ async function main() {
 	const readState = (number: number) =>
 		readPullRequestState({ repository, number, githubToken })
 
-	const pullRequestNumbers = collectPreviewPullRequestNumbers(
-		await listPreviewCandidateNames(client),
-	)
+	const names = await listPreviewCandidateNames(client)
+	const liveNames = new Set(names)
+	const pullRequestNumbers = collectPreviewPullRequestNumbers(names)
 	const states = new Map<number, PullRequestState>()
 	for (const number of pullRequestNumbers) {
 		states.set(number, await readState(number))
@@ -239,9 +321,40 @@ async function main() {
 			failed.push(number)
 		}
 	}
-	if (failed.length > 0) {
+	const branchWorkerNames = collectPreviewBranchWorkerNames(names)
+	const branchPlan = planBranchPreviewSweep({
+		branchWorkerNames,
+		liveNames,
+		maxPerRun,
+	})
+	console.log(
+		[
+			`Branch preview sweep: ${String(branchWorkerNames.length)} branch preview(s) on the account.`,
+			`  live: ${branchPlan.live.join(', ') || 'none'}`,
+			`  orphaned, sweeping now: ${branchPlan.sweep.join(', ') || 'none'}`,
+			`  orphaned, next run: ${branchPlan.deferred.join(', ') || 'none'}`,
+		].join('\n'),
+	)
+
+	const failedBranches: Array<string> = []
+	for (const workerName of branchPlan.sweep) {
+		assertPreviewResourceName(workerName, 'worker')
+		console.log(`Cleaning up ${workerName}${dryRun ? ' (dry run)' : ''}.`)
+		try {
+			await cleanupPreviewResources({ workerName, dryRun, ...client })
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : String(error))
+			failedBranches.push(workerName)
+		}
+	}
+
+	if (failed.length > 0 || failedBranches.length > 0) {
+		const failedNames = [
+			...failed.map((number) => `kody-pr-${String(number)}`),
+			...failedBranches,
+		]
 		fail(
-			`Preview sweep could not fully clean up: ${failed.map((number) => `kody-pr-${String(number)}`).join(', ')}. The next scheduled run retries them.`,
+			`Preview sweep could not fully clean up: ${failedNames.join(', ')}. The next scheduled run retries them.`,
 		)
 	}
 }

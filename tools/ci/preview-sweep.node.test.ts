@@ -1,8 +1,11 @@
 import { expect, test } from 'vitest'
 import {
+	collectPreviewBranchWorkerNames,
 	collectPreviewPullRequestNumbers,
 	listPreviewCandidateNames,
+	planBranchPreviewSweep,
 	planPreviewSweep,
+	previewBranchWorkerName,
 	previewPullRequestNumber,
 	readPullRequestState,
 	type PullRequestState,
@@ -45,6 +48,65 @@ test('collectPreviewPullRequestNumbers dedupes and sorts PR numbers', () => {
 			'kody-branch-x',
 		]),
 	).toEqual([4, 30])
+})
+
+test('previewBranchWorkerName reads the bare worker name from any branch-preview resource', () => {
+	expect(previewBranchWorkerName('kody-branch-teams-rehearsal')).toBe(
+		'kody-branch-teams-rehearsal',
+	)
+	expect(previewBranchWorkerName('kody-branch-teams-rehearsal-db')).toBe(
+		'kody-branch-teams-rehearsal',
+	)
+	expect(
+		previewBranchWorkerName('kody-branch-local-execute-parity-0092-audit-db'),
+	).toBe('kody-branch-local-execute-parity-0092')
+
+	for (const name of [
+		'kody',
+		'kody-platform',
+		'kody-pr-12',
+		'kody-pr-12-branch-x',
+		'other-branch-x',
+	]) {
+		expect({ name, workerName: previewBranchWorkerName(name) }).toEqual({
+			name,
+			workerName: null,
+		})
+	}
+})
+
+test('collectPreviewBranchWorkerNames dedupes and sorts branch worker names', () => {
+	expect(
+		collectPreviewBranchWorkerNames([
+			'kody-branch-b-runtime',
+			'kody-pr-4',
+			'kody-branch-a',
+			'kody-branch-b',
+			'kody-branch-a-db',
+		]),
+	).toEqual(['kody-branch-a', 'kody-branch-b'])
+})
+
+test('planBranchPreviewSweep sweeps orphaned branch previews up to the cap', () => {
+	const liveNames = new Set(['kody-branch-live'])
+	expect(
+		planBranchPreviewSweep({
+			branchWorkerNames: ['kody-branch-a', 'kody-branch-b', 'kody-branch-live'],
+			liveNames,
+			maxPerRun: 1,
+		}),
+	).toEqual({
+		sweep: ['kody-branch-a'],
+		deferred: ['kody-branch-b'],
+		live: ['kody-branch-live'],
+	})
+	expect(
+		planBranchPreviewSweep({
+			branchWorkerNames: ['kody-branch-a'],
+			liveNames: new Set(),
+			maxPerRun: 0,
+		}).sweep,
+	).toEqual([])
 })
 
 test('planPreviewSweep sweeps closed PRs oldest first up to the cap', () => {
