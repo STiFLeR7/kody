@@ -7,7 +7,10 @@
   old-lane removal; integration-token placeholders are permanent; the webhook
   no-actor exception stays unless a proven replacement breaks nothing);
   2026-10-12 (Kent: manifest credential need `kind` is optional — see
-  [Amendment 2026-10-12](#amendment-2026-10-12))
+  [Amendment 2026-10-12](#amendment-2026-10-12)); 2026-10-12 (Kent: unbound
+  errors carry a creation-page link; Approve bundles trigger and ad hoc default
+  mappings; creation-link kind hint/required; MCP servers are credentials in the
+  same list — see [Amendment 2026-10-12](#amendment-2026-10-12))
 - **Supersedes in part:** [0021](./0021-publish-gated-package-composition.md)
   (credential authority for the opt-in types used through scoped clients), and
   credentials plan v4 section 3.3 (assignments) and section 3.4 (placeholder
@@ -488,5 +491,16 @@ Kent: manifest credential need `kind` becomes **optional**.
 - **Missing scopes** surface at call time via 401/403 `x-kody-credential-hint`.
   Declaring scopes is possible future work.
 - **Naming direction:** `credentials` is the umbrella term everywhere (secrets
-  and integrations are credential subtypes). UI/UX is designed separately and is
-  not decided here.
+  and integrations are credential subtypes). MCP servers are credentials too and
+  appear in the same credentials list.
+- **Unbound / missing at runtime:** when a run hits a missing or unbound
+  credential, the agent always surfaces a link to the credential creation page,
+  never a bare error. `credential_unbound` and `credential_not_found` errors
+  carry that link.
+- **Credential approval page:** one Approve action bundles trigger mappings and
+  ad hoc default mappings together.
+- **Creation-link design:** agents provide a link like the existing
+  secret-intake (`/connect/secret-set`) and `/connect/oauth` flows. A query
+  param for `kind` can be a **hint** (default kind, chooser shown) or
+  **required** (kind locked, no chooser UI). The one-pager reuses the existing
+  secret-intake or OAuth components, chosen by kind.
