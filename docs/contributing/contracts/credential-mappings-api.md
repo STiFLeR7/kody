@@ -226,6 +226,12 @@ export type CredentialListResponse = {
 - Session-scoped Keys are not listed.
 - `scope: 'personal'` rows are the viewer's own personal credentials granted to
   this org. Nobody else's personal credentials appear.
+- Org binding works like the other org-owned account JSON: a same-origin fetch
+  from an `/@slug/-/…` page binds that org, and the Secrets section gate
+  applies. Without such a Referer the signup org is used.
+- Org rows follow the viewer's grants: Keys need `secret:use`; OAuth and MCP
+  rows need `integration:read` (org-wide or granted on that credential).
+- Package code cannot call `credentialList`.
 
 ## Package credentials API
 

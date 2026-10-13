@@ -145,6 +145,7 @@ import {
 import { createCommunityPackageWebhooksApiHandler } from '#app/handlers/package-webhooks.ts'
 import { createAccountResendVerificationHandler } from '#app/handlers/account-resend-verification.ts'
 import { createPendingVerificationHandler } from '#app/handlers/pending-verification.ts'
+import { createAccountCredentialsApiHandler } from '#app/handlers/account-credentials.ts'
 import { createAccountSecretsApiHandler } from '#app/handlers/account-secrets.ts'
 import { createAccountSecretProvidersApiHandler } from '#app/handlers/account-secret-providers.ts'
 import { createAccountValuesApiHandler } from '#app/handlers/account-values.ts'
@@ -529,6 +530,7 @@ export function createAppRouter(env: Env) {
 			accountEmailClaimRelease: createAccountEmailClaimReleaseHandler(env),
 			accountPassword: createAccountPasswordHandler(env),
 			accountResendVerification: createAccountResendVerificationHandler(env),
+			accountCredentialsApi: createAccountCredentialsApiHandler(env),
 			accountSecretsApi: createAccountSecretsApiHandler(env),
 			accountSecretsApiPost: createAccountSecretsApiHandler(env),
 			accountSecretProvidersApi: createAccountSecretProvidersApiHandler(env),

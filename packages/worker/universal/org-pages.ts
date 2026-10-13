@@ -71,7 +71,8 @@ function isOrgOwnedAccountSection(
  * Connections page reads `/account/connected-agents.json` and
  * `/account/connection-usage.json`; `/account/connections.json` is the
  * person's sign-in providers. The Memories download is
- * `/account/memories-export.json`.
+ * `/account/memories-export.json`. The credentials list
+ * (`/account/credentials.json`) shares the Secrets section gate.
  * `/account/packages.json` lists and mutates without per-package authz, so it
  * stays on the person; team Repositories read `/@slug/-/repositories.json`.
  */
@@ -84,6 +85,7 @@ export function orgOwnedAccountApiSection(
 		return 'connections'
 	}
 	if (name === 'memories-export') return 'memories'
+	if (name === 'credentials') return 'secrets'
 	if (name === 'connections' || name === 'packages') return null
 	return isOrgOwnedAccountSection(name) ? name : null
 }
