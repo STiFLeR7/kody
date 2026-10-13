@@ -65,8 +65,37 @@ export type CredentialProviderBindingItem = {
 	updatedAt: string
 }
 
+/** How one package need relates to a credential. */
+export type CredentialNeedFit =
+	/** The only candidate, so a run picks it with no mapping. */
+	| 'auto'
+	/** One of several candidates; a run needs a mapping to pick it. */
+	| 'candidate'
+	/** Same kind with no provider; it can be mapped, or given a provider. */
+	| 'possible'
+
+/** What the detail pane adds to a list row. Never a value. */
+export type AccountCredentialDetail = {
+	id: string
+	/** The legacy placeholder that fills this value on its hosts, if any. */
+	placeholder: string | null
+	/** Team orgs a personal credential is granted to. */
+	grants: Array<{ orgSlug: string; orgName: string; grantedAt: string }>
+	/** Needs of this org's packages this credential can fill. */
+	usage: Array<{
+		packageId: string
+		kodyId: string
+		needKey: string
+		fit: CredentialNeedFit
+	}>
+	/** True when only the first packages were checked for `usage`. */
+	usageTruncated: boolean
+}
+
 /** The contract response plus what the website page needs to render it. */
 export type AccountCredentialsResponse = CredentialListResponse & {
+	/** Set when the request named a credential (`?selected=<id>`). */
+	selected: AccountCredentialDetail | null
 	orgSlug: string
 	/** Where the viewer's personal credentials are managed. */
 	personalOrgSlug: string | null

@@ -10,8 +10,11 @@ import {
 	AccountManagementShell,
 	AccountPageHeader,
 } from '#client/routes/account-management-components.tsx'
+import { renderCredentialDetail } from '#client/routes/account-credential-detail.tsx'
 import {
 	credentialManageHref,
+	credentialsDataKey,
+	credentialsRoute,
 	fetchAccountCredentials,
 	readCredentialListFilters,
 	writeCredentialListFilters,
@@ -56,11 +59,6 @@ const headerActionsCss = css({
 	flexWrap: 'wrap',
 	gap: spacing.sm,
 })
-
-/** The list shares one payload; filters only change what is shown. */
-function credentialsDataKey(href: string) {
-	return new URL(href, 'http://localhost').pathname
-}
 
 function scopeLabel(credential: CredentialListItem) {
 	return credential.scope === 'personal' ? 'Personal' : 'Org'
@@ -221,6 +219,20 @@ export function AccountCredentialsRoute(handle: Handle) {
 		const shown = filterCredentialListItems(credentials, filters)
 		const orgSlug = payload?.orgSlug ?? ''
 		const teamOrg = payload?.teamOrg ?? false
+		const selection = credentialsRoute.getSelection(currentHref)
+		const search = new URL(currentHref, 'http://localhost').search
+		const selectedItem =
+			credentials.find((item) => item.id === selection.selectedId) ?? null
+		const selectedDetail =
+			payload?.selected && payload.selected.id === selection.selectedId
+				? payload.selected
+				: null
+		const personalOrgSlug = payload?.personalOrgSlug ?? null
+		const selectedMissing =
+			selection.selectedId !== null &&
+			status === 'ready' &&
+			!pending &&
+			!selectedItem
 		const lockedPackageId =
 			typeof filters.locked === 'string' ? filters.locked : ''
 		const shownProviders = filterProviderBindings(
@@ -274,9 +286,32 @@ export function AccountCredentialsRoute(handle: Handle) {
 					</AccountManagementMessage>
 				) : null}
 
+				{selectedMissing ? (
+					<AccountManagementMessage tone="error">
+						That credential was not found in this org. It may have been deleted,
+						or it belongs to another org.
+					</AccountManagementMessage>
+				) : null}
+
 				<RecordTable
-					mode="none"
+					mode="expand"
 					ariaLabel="Credentials"
+					selectedId={selectedItem ? selectedItem.id : null}
+					recordLoading={Boolean(selectedItem && !selectedDetail && pending)}
+					record={
+						selectedItem
+							? renderCredentialDetail({
+									credential: selectedItem,
+									detail: selectedDetail,
+									manageHref: credentialManageHref(selectedItem, {
+										orgSlug,
+										personalOrgSlug,
+									}),
+									teamOrg,
+									packagesById,
+								})
+							: undefined
+					}
 					countLabel={
 						status === 'ready'
 							? `${shown.length} of ${credentials.length} shown`
@@ -318,7 +353,9 @@ export function AccountCredentialsRoute(handle: Handle) {
 							>
 								<option value="all">All kinds</option>
 								{credentialKinds.map((kind) => (
-									<option value={kind}>{credentialKindLabel(kind)}</option>
+									<option key={kind} value={kind}>
+										{credentialKindLabel(kind)}
+									</option>
 								))}
 							</RecordTableSelect>
 							{teamOrg ? (
@@ -389,11 +426,15 @@ export function AccountCredentialsRoute(handle: Handle) {
 						{ key: 'status', label: 'Status' },
 					]}
 					rows={shown.map((credential) => ({
-						id: `${credential.scope}:${credential.id}`,
-						href: credentialManageHref(credential, {
-							orgSlug,
-							personalOrgSlug: payload?.personalOrgSlug ?? null,
-						}),
+						id: credential.id,
+						href:
+							credential.id === selection.selectedId
+								? credentialsRoute.buildListHref(search, currentHref)
+								: credentialsRoute.buildDetailHref(
+										credential.id,
+										search,
+										currentHref,
+									),
 						cells: {
 							name: <span mix={clampedCellCss}>{credential.name}</span>,
 							kind: (

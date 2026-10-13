@@ -1,4 +1,5 @@
 import { buildAccountSecretPath } from '@kody-internal/shared/account-secret-route.ts'
+import { createListDetailRoute } from '#client/list-detail-route.ts'
 import { orgAccountApiReferrer } from '#client/org-account-api.ts'
 import { readJson } from '#client/routes/account-approval-shared.ts'
 import {
@@ -16,6 +17,16 @@ import {
 } from '#universal/credentials-list.ts'
 import { orgResourcePath } from '#universal/org-pages.ts'
 import { routes } from '#universal/routes.ts'
+
+export const credentialsRoute = createListDetailRoute('/account/credentials')
+
+/** One payload per selection; filters only change which rows show. */
+export function credentialsDataKey(href: string) {
+	const selectedId = credentialsRoute.getSelection(href).selectedId
+	return selectedId
+		? `/account/credentials?selected=${encodeURIComponent(selectedId)}`
+		: '/account/credentials'
+}
 
 export function readCredentialListFilters(href: string) {
 	return parseCredentialListQuery(
@@ -89,7 +100,11 @@ export async function fetchAccountCredentials(
 	href: string,
 	signal: AbortSignal,
 ) {
-	const response = await fetch(accountCredentialsApiPath, {
+	const selectedId = credentialsRoute.getSelection(href).selectedId
+	const requestPath = selectedId
+		? `${accountCredentialsApiPath}?${new URLSearchParams({ selected: selectedId })}`
+		: accountCredentialsApiPath
+	const response = await fetch(requestPath, {
 		headers: { Accept: 'application/json' },
 		credentials: 'include',
 		referrer: orgAccountApiReferrer(href),

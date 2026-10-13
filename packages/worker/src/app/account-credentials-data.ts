@@ -1,5 +1,6 @@
 import { personalOrgId } from '@kody-internal/shared/owner-person-ids.ts'
 import { type AuthenticatedAppUser } from '#app/authenticated-user.ts'
+import { loadCredentialDetail } from '#worker/credentials/credential-detail.ts'
 import { listOrgCredentials } from '#worker/credentials/credential-list.ts'
 import { loadOrgBindingForOrg } from '#worker/orgs/repo.ts'
 import { listSavedPackagesByUserId } from '#worker/package-registry/repo.ts'
@@ -15,6 +16,8 @@ export async function loadAccountCredentialsData(input: {
 	env: Env
 	user: AuthenticatedAppUser
 	filters?: CredentialListFilters
+	/** A credential id to load the detail pane for. */
+	selectedId?: string | null
 }): Promise<AccountCredentialsResponse> {
 	const orgId = ownerIdFromCaller({
 		request: input.user.request,
@@ -33,8 +36,21 @@ export async function loadAccountCredentialsData(input: {
 		listOrgCredentials({ db: input.env.APP_DB, orgId, viewerPersonId: viewer }),
 		listSavedPackagesByUserId(input.env.APP_DB, { userId: orgId }),
 	])
+	const selectedItem = input.selectedId
+		? listed.credentials.find((item) => item.id === input.selectedId)
+		: undefined
+	const selected = selectedItem
+		? await loadCredentialDetail({
+				env: input.env,
+				request: input.user.request,
+				orgId,
+				credential: selectedItem,
+				packages,
+			})
+		: null
 	return {
 		ok: true,
+		selected,
 		credentials: input.filters
 			? filterCredentialListItems(listed.credentials, input.filters)
 			: listed.credentials,

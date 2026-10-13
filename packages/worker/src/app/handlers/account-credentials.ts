@@ -11,12 +11,19 @@ import { type routes } from '#universal/routes.ts'
 export function createAccountCredentialsHandler(env: Env) {
 	return {
 		middleware: [],
-		async handler({ request }: { request: Request }) {
+		async handler({
+			request,
+			params,
+		}: {
+			request: Request
+			params: { credentialId?: string }
+		}) {
 			const user = await requireAuthenticatedPageUser(request, env)
 			if (user instanceof Response) return user
 			const accountCredentials = await loadAccountCredentialsData({
 				env,
 				user,
+				selectedId: params.credentialId ?? null,
 			})
 			return renderAppPage({
 				request,
@@ -37,11 +44,13 @@ export function createAccountCredentialsApiHandler(env: Env) {
 			if (!user) {
 				return jsonResponse({ ok: false, error: 'Unauthorized.' }, 401)
 			}
+			const params = new URL(request.url).searchParams
 			return jsonResponse(
 				await loadAccountCredentialsData({
 					env,
 					user,
-					filters: parseCredentialListQuery(new URL(request.url).searchParams),
+					filters: parseCredentialListQuery(params),
+					selectedId: params.get('selected'),
 				}),
 			)
 		},
