@@ -197,9 +197,9 @@ export type CredentialListItem = {
 	hosts: Array<string>
 	/** Placement through a scoped client; null when the kind has none. */
 	inject:
-		| { type: 'header'; name: string; format: string }
-		| { type: 'basic'; valueAs: 'username' | 'password'; other: string }
-		| { type: 'query'; param: string }
+		| { kind: 'header'; name: string; format: string }
+		| { kind: 'basic'; valueAs: 'username' | 'password'; other: string }
+		| { kind: 'query'; param: string }
 		| null
 	/** Package-scoped Key: the package it belongs to. */
 	packageId: string | null
