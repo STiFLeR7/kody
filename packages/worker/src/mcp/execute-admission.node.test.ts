@@ -5,6 +5,10 @@ import {
 	executeDailyWarningCrossing,
 	executeRepeatKey,
 } from '#mcp/execute-admission.ts'
+import {
+	normalizeCredentialCallMap,
+	type CredentialCallMapInput,
+} from '#worker/credentials/credential-call-map.ts'
 
 test('the daily warning crossing fires only on the claim that lands on 80% or 100%', () => {
 	const kinds = [119, 120, 121, 149, 150].map((used) =>
@@ -70,14 +74,14 @@ test('the loop brake key tells credential picks apart and keeps old keys', async
 		invoke: 'kody:@acme/digest',
 		params: { day: 'mon' },
 	}
-	const work = await executeRepeatKey({
-		...base,
-		credentials: { github: 'work' },
-	})
-	expect(work).not.toBe(
-		await executeRepeatKey({ ...base, credentials: { github: 'personal' } }),
-	)
-	expect(await executeRepeatKey({ ...base, credentials: undefined })).toBe(
-		await executeRepeatKey(base),
-	)
+	const keyFor = async (credentials: CredentialCallMapInput | undefined) =>
+		await executeRepeatKey({
+			...base,
+			credentials: normalizeCredentialCallMap(credentials),
+		})
+	const work = await keyFor({ github: 'work' })
+	expect(work).not.toBe(await keyFor({ github: 'personal' }))
+	expect(await keyFor({ github: ['work'] })).toBe(work)
+	expect(await keyFor({ github: { name: 'work' } })).toBe(work)
+	expect(await keyFor(undefined)).toBe(await executeRepeatKey(base))
 })

@@ -504,6 +504,7 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 				// Admission is a UserMeter round trip that only gates work below it,
 				// so let it overlap the registry read; nothing that writes, retrieves
 				// memories, or runs sandbox code proceeds until it has admitted.
+				const normalizedCallMap = normalizeCredentialCallMap(credentials)
 				const admissionPromise = claimWorkerDay
 					? admitHostedExecuteCall({
 							env,
@@ -519,7 +520,7 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 								code,
 								invoke,
 								params,
-								credentials,
+								credentials: normalizedCallMap,
 							}),
 						})
 					: null
@@ -571,7 +572,6 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 				).length
 				const rawFetchHosts = createRawFetchHostSink()
 				const credentialCallMapWarnings: Array<string> = []
-				const normalizedCallMap = normalizeCredentialCallMap(credentials)
 				const credentialCallMap = normalizedCallMap
 					? {
 							map: normalizedCallMap,
