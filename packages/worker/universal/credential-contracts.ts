@@ -452,7 +452,10 @@ const reservedPickPrefix = /^(org|personal|id|name):/
 function formatCredentialPick(pick: CredentialPick): string {
 	if ('id' in pick) return `id:${pick.id}`
 	if (pick.scope) return `${pick.scope}:${pick.name}`
-	return reservedPickPrefix.test(pick.name) ? `name:${pick.name}` : pick.name
+	// A blank value means "none on purpose"; `name:` keeps a blank name invalid.
+	return reservedPickPrefix.test(pick.name) || !pick.name.trim()
+		? `name:${pick.name}`
+		: pick.name
 }
 
 /**
@@ -579,24 +582,25 @@ function parseProposalParamName(
 }
 
 /**
- * Reads a proposal from the approval page's query. Values for one param
- * accumulate in order; only a lone empty value maps the need to `[]`. A value
- * that is not a pick, or an empty value beside others, is an error and drops
- * that param's change. Params that look like mapping params but do not parse
- * are reported; other params are ignored.
+ * Reads a proposal from the approval page's query. Values for one target and
+ * need accumulate in order, even when their param names are spelled
+ * differently; only a lone empty value maps the need to `[]`. A value that is
+ * not a pick, or an empty value beside others, is an error and drops that
+ * change. Params that look like mapping params but do not parse are reported;
+ * other params are ignored.
  */
 export function parseCredentialApprovalQuery(
 	search: URLSearchParams,
 ): ParsedCredentialProposal {
 	const errors: Array<string> = []
-	const byParam = new Map<
+	const byTarget = new Map<
 		string,
 		{
+			name: string
 			change: Omit<CredentialMappingProposalChange, 'credentials'>
 			values: Array<string>
 		}
 	>()
-	let valueCount = 0
 	for (const [name, value] of search) {
 		if (name === 'reason') continue
 		const parsed = parseProposalParamName(name)
@@ -612,13 +616,22 @@ export function parseCredentialApprovalQuery(
 			errors.push(`"${name}" is missing a name.`)
 			continue
 		}
-		valueCount += 1
-		const entry = byParam.get(name) ?? { change: parsed, values: [] }
+		const key = JSON.stringify([parsed.target, parsed.needKey])
+		const entry = byTarget.get(key) ?? { name, change: parsed, values: [] }
 		entry.values.push(value)
-		byParam.set(name, entry)
+		byTarget.set(key, entry)
+	}
+	if (byTarget.size > maxCredentialProposalValues) {
+		return {
+			changes: [],
+			reason: null,
+			errors: [
+				`A proposal holds at most ${maxCredentialProposalValues} mapping parameters; this one has ${byTarget.size}.`,
+			],
+		}
 	}
 	const changes: Array<CredentialMappingProposalChange> = []
-	for (const [name, { change, values }] of byParam) {
+	for (const { name, change, values } of byTarget.values()) {
 		if (values.length === 1 && !values[0]!.trim()) {
 			changes.push({ ...change, credentials: [] })
 			continue
@@ -641,15 +654,6 @@ export function parseCredentialApprovalQuery(
 			continue
 		}
 		changes.push({ ...change, credentials })
-	}
-	if (valueCount > maxCredentialProposalValues) {
-		return {
-			changes: [],
-			reason: null,
-			errors: [
-				`A proposal holds at most ${maxCredentialProposalValues} mapping values; this one has ${valueCount}.`,
-			],
-		}
 	}
 	const reason = trimmed(search.get('reason'))
 	return {

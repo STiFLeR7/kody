@@ -269,6 +269,63 @@ test('approval queries report malformed mapping params and cap the size', () => 
 	const capped = parseCredentialApprovalQuery(tooMany)
 	expect(capped.changes).toEqual([])
 	expect(capped.errors).toHaveLength(1)
+
+	// The cap counts mapping params; a repeatable param may list many values.
+	const manyValues = new URLSearchParams()
+	for (let index = 0; index <= maxCredentialProposalValues; index += 1) {
+		manyValues.append('default[github]', `bot-${index}`)
+	}
+	const repeated = parseCredentialApprovalQuery(manyValues)
+	expect(repeated.errors).toEqual([])
+	expect(repeated.changes[0]!.credentials).toHaveLength(
+		maxCredentialProposalValues + 1,
+	)
+})
+
+test('param names that decode to one target and need make one change', () => {
+	const parsed = parseCredentialApprovalQuery(
+		new URLSearchParams(
+			'default[github]=org:bot&default[git%68ub]=personal:me&default[ github ]=extra&trigger[cron:daily][slack]=a&trigger[cron: daily][slack]=b',
+		),
+	)
+	expect(parsed.errors).toEqual([])
+	expect(parsed.changes).toEqual([
+		{
+			target: { type: 'default', layer: 'org' },
+			needKey: 'github',
+			credentials: [
+				{ name: 'bot', scope: 'org' },
+				{ name: 'me', scope: 'personal' },
+				{ name: 'extra' },
+			],
+		},
+		{
+			target: { type: 'trigger', trigger: { kind: 'cron', name: 'daily' } },
+			needKey: 'slack',
+			credentials: [{ name: 'a' }, { name: 'b' }],
+		},
+	])
+})
+
+test('a blank pick name never encodes as none on purpose', () => {
+	const href = buildCredentialApprovalHref({
+		username: 'acme',
+		kodyId: 'digest',
+		changes: [
+			{
+				target: { type: 'default', layer: 'mine' },
+				needKey: 'mail',
+				credentials: [{ name: '  ' }],
+			},
+		],
+	})
+	const parsed = parseCredentialApprovalQuery(
+		new URL(href, 'https://kody.codes').searchParams,
+	)
+	expect(parsed.changes).toEqual([])
+	expect(parsed.errors).toEqual([
+		'"mine[mail]" has a value that is not a credential pick: "name:  ".',
+	])
 })
 
 test('vocabularies match the contract', () => {
