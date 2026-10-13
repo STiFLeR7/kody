@@ -24,7 +24,13 @@ import { buildConnectOauthNextSteps } from '#app/connect-oauth-next-steps.ts'
 import { renderAppPage } from '#app/ssr-render.tsx'
 import { normalizeBulkPackageSecretApprovalNames } from '#mcp/secrets/package-approval-url.ts'
 import {
+	credentialProviderSchema,
+	updateCredentialFields,
+} from '#worker/credentials/credential-fields.ts'
+import { orgAuditWriterFromRequest } from '#worker/orgs/org-audit.ts'
+import {
 	deleteSecret,
+	findSecret,
 	listSecrets,
 	resolveSecret,
 	saveSecret,
@@ -1228,6 +1234,16 @@ async function handleSaveAction(input: {
 	const allowedPackages = normalizeAllowedPackages(
 		readStringArray(input.body, 'allowedPackages'),
 	)
+	const providerText = readOptionalString(input.body, 'provider')
+	const provider = providerText
+		? credentialProviderSchema.safeParse(providerText)
+		: null
+	if (provider && !provider.success) {
+		return jsonResponse(
+			{ ok: false, error: provider.error.issues[0]?.message },
+			400,
+		)
+	}
 
 	if (!name) {
 		return jsonResponse({ ok: false, error: 'Secret name is required.' }, 400)
@@ -1361,6 +1377,37 @@ async function handleSaveAction(input: {
 				packageId,
 			}),
 		})
+
+		// Only org Keys carry credential fields; the link's provider makes the
+		// new Key match the need that asked for it.
+		if (provider?.success && scope === 'user') {
+			const stored = await findSecret({
+				env: input.env,
+				userId: ownerIdFromCaller({
+					request: input.user.request,
+					user: input.user.mcpUser,
+				}),
+				name,
+				scope,
+				includeExpired: true,
+				storageContext: getSecretContextForAccountSecret({
+					scope,
+					packageId,
+				}),
+			})
+			if (stored.credentialId) {
+				await updateCredentialFields({
+					db: input.env.APP_DB,
+					orgId: ownerIdFromCaller({
+						request: input.user.request,
+						user: input.user.mcpUser,
+					}),
+					credentialId: stored.credentialId,
+					update: { provider: provider.data },
+					audit: orgAuditWriterFromRequest(input.env, input.user.request),
+				})
+			}
+		}
 
 		if (currentSecret && currentSecret.id !== nextId) {
 			await deleteSecret({

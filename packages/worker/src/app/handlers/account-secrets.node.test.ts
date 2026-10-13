@@ -13,6 +13,7 @@ import type * as AllowedHosts from '#mcp/secrets/allowed-hosts.ts'
 import type * as HostApproval from '#mcp/secrets/host-approval.ts'
 import type * as IntegrationsService from '#worker/integrations/service.ts'
 import type * as IntegrationsCredentials from '#worker/integrations/credentials.ts'
+import type * as CredentialFields from '#worker/credentials/credential-fields.ts'
 import { sessionRequestContext } from '#worker/test-support/request-context.ts'
 
 const mockModule = vi.hoisted(() => ({
@@ -95,6 +96,16 @@ const mockModule = vi.hoisted(() => ({
 		allowedPackages: [],
 	})),
 	deleteSecret: vi.fn<typeof secretsService.deleteSecret>(async () => false),
+	findSecret: vi.fn<typeof secretsService.findSecret>(async () => ({
+		found: true,
+		credentialId: 'cred-saved',
+		scope: 'user',
+		allowedHosts: [],
+		allowedPackages: [],
+	})),
+	updateCredentialFields: vi.fn<typeof CredentialFields.updateCredentialFields>(
+		async () => ({}) as never,
+	),
 	setSecretAllowedPackages: vi.fn<
 		typeof secretsService.setSecretAllowedPackages
 	>(async (input) => ({
@@ -267,9 +278,25 @@ vi.mock('#mcp/secrets/service.ts', () => ({
 		mockModule.resolveSecret(...args),
 	deleteSecret: (...args: Parameters<typeof secretsService.deleteSecret>) =>
 		mockModule.deleteSecret(...args),
+	findSecret: (...args: Parameters<typeof secretsService.findSecret>) =>
+		mockModule.findSecret(...args),
 	setSecretAllowedPackages: (
 		...args: Parameters<typeof secretsService.setSecretAllowedPackages>
 	) => mockModule.setSecretAllowedPackages(...args),
+}))
+
+vi.mock('#worker/credentials/credential-fields.ts', async (importOriginal) => {
+	const actual = await importOriginal<typeof CredentialFields>()
+	return {
+		...actual,
+		updateCredentialFields: (
+			...args: Parameters<typeof CredentialFields.updateCredentialFields>
+		) => mockModule.updateCredentialFields(...args),
+	}
+})
+
+vi.mock('#worker/orgs/org-audit.ts', () => ({
+	orgAuditWriterFromRequest: () => ({ audit: 'writer' }),
 }))
 
 vi.mock('#mcp/values/service.ts', () => ({
@@ -1146,6 +1173,69 @@ test('account secrets save returns the new secret after a successful write', asy
 			scope: 'user',
 		}),
 	)
+})
+
+test('account secrets save sets the provider from a creation link on org Keys only', async () => {
+	mockSecretsListing([])
+	const call = createHandler()
+	const save = (body: Record<string, unknown>) =>
+		call(
+			postRequest({
+				action: 'save',
+				name: 'resend',
+				value: 'fresh-secret',
+				allowedHosts: [],
+				allowedPackages: [],
+				...body,
+			}),
+		)
+
+	mockModule.updateCredentialFields.mockClear()
+	expect((await save({ scope: 'user', provider: 'resend' })).status).toBe(200)
+	expect(mockModule.findSecret).toHaveBeenCalledWith(
+		expect.objectContaining({ name: 'resend', scope: 'user' }),
+	)
+	expect(mockModule.updateCredentialFields).toHaveBeenCalledWith(
+		expect.objectContaining({
+			credentialId: 'cred-saved',
+			update: { provider: 'resend' },
+			audit: { audit: 'writer' },
+		}),
+	)
+
+	mockModule.updateCredentialFields.mockClear()
+	expect((await save({ scope: 'user' })).status).toBe(200)
+	mockModule.listSavedPackagesByUserId.mockResolvedValueOnce([
+		{
+			id: 'pkg-1',
+			userId: ownerIdFromStored('stable-user-1'),
+			name: '@kentcdodds/mailer',
+			kodyId: 'mailer',
+			description: '',
+			tags: [],
+			searchText: null,
+			sourceId: 'source-1',
+			hasApp: false,
+			hidden: false,
+			isPrivate: false,
+			isInternetVisible: false,
+			createdAt: epoch,
+			updatedAt: epoch,
+		},
+	] as never)
+	expect(
+		(await save({ scope: 'package', packageId: 'pkg-1', provider: 'resend' }))
+			.status,
+	).toBe(200)
+	expect(mockModule.updateCredentialFields).not.toHaveBeenCalled()
+
+	const invalid = await save({ scope: 'user', provider: 'Not A Slug' })
+	expect(invalid.status).toBe(400)
+	await expect(invalid.json()).resolves.toMatchObject({
+		ok: false,
+		error: expect.stringContaining('A provider is a slug'),
+	})
+	expect(mockModule.updateCredentialFields).not.toHaveBeenCalled()
 })
 
 test('account secrets save stays ok when metadata reload fails after write', async () => {
