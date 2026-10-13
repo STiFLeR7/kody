@@ -214,6 +214,7 @@ export const apiOperations: ReadonlyArray<ApiOperation> = [
 		['GET', '/v1/enablements', 'enablementList'],
 		['POST', '/v1/enablements', 'enablementEnable'],
 		['POST', '/v1/enablements/{enablementId}/disable', 'enablementDisable'],
+		['POST', '/v1/enablements/{enablementId}/credentials', 'enablementUpdate'],
 	]),
 	...capabilityRoutes('repos', [
 		['GET', '/v1/repos', 'repoList'],

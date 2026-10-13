@@ -25,12 +25,21 @@ import {
 	setWebhookEndpointHmacSecret,
 } from '#worker/webhooks/repo.ts'
 import { mintPackageOwnedWebhookHmacCiphertext } from '#worker/webhooks/signing-secret.ts'
+import { type CredentialCallMap } from '#worker/credentials/credential-call-map.ts'
 import {
+	orgAuditWriterFromRequest,
+	runAppDbBatchWithOrgAudit,
+} from '#worker/orgs/org-audit.ts'
+import { snapshotEnablementCredentials } from './credential-mapping.ts'
+import { pausedOnCredentialMapping } from './credential-pause.ts'
+import {
+	buildSetEnablementCredentialMappingStatement,
 	disableEnablement,
 	getEnablementById,
 	insertEnablement,
 	listEnablementsForInstance,
 	listEnablementsForOrg,
+	resumeEnablement,
 } from './repo.ts'
 import { type EnablementRecord, type EnablementTriggerKind } from './types.ts'
 
@@ -147,7 +156,9 @@ async function resolveDeclaredTrigger(input: {
 
 /**
  * Turn a declared trigger on for the caller. The caller needs
- * `package:execute` on the package, and every run then acts as them.
+ * `package:execute` on the package, and every run then acts as them. Its
+ * credential needs are resolved once, with the caller's `credentials` picks,
+ * and stored on the new enablement.
  */
 export async function enableTriggerForCaller(input: {
 	env: Env
@@ -156,7 +167,8 @@ export async function enableTriggerForCaller(input: {
 	packageIdOrKodyId: string
 	kind: EnablementTriggerKind
 	name: string
-}): Promise<EnablementRecord> {
+	credentials?: CredentialCallMap | null
+}): Promise<{ enablement: EnablementRecord; warnings: Array<string> }> {
 	const actor = requireActor(input.request)
 	const savedPackage = await resolveOrgPackage({
 		db: input.env.APP_DB,
@@ -181,6 +193,11 @@ export async function enableTriggerForCaller(input: {
 	})
 	const db = input.env.APP_DB
 	const orgId = savedPackage.userId
+	const credentials = input.credentials ?? null
+	const alreadyOn = () =>
+		new McpCallerError(
+			`${input.kind} "${trigger.triggerName}" is already on for you. Change its credentials with enablementUpdate.`,
+		)
 	const [webhookEnabler] = trigger.webhookEnablers ?? []
 	if (
 		webhookEnabler &&
@@ -205,7 +222,10 @@ export async function enableTriggerForCaller(input: {
 			hmacSecretEncrypted: encrypted,
 		})
 	}
-	if (webhookEnabler) return webhookEnabler
+	if (webhookEnabler) {
+		if (credentials) throw alreadyOn()
+		return { enablement: webhookEnabler, warnings: [] }
+	}
 	const ownExisting = (
 		await listEnablementsForInstance({
 			db,
@@ -217,8 +237,17 @@ export async function enableTriggerForCaller(input: {
 				: {}),
 		})
 	).find((row) => String(row.enablerUserId) === String(actor.userId))
-	if (ownExisting) return ownExisting
-	return await insertEnablement({
+	if (ownExisting) {
+		if (credentials) throw alreadyOn()
+		return { enablement: ownExisting, warnings: [] }
+	}
+	const { mapping, warnings } = await snapshotEnablementCredentials({
+		env: input.env,
+		request: input.request,
+		packageId: savedPackage.id,
+		map: credentials,
+	})
+	const enablement = await insertEnablement({
 		db,
 		enablement: {
 			orgId,
@@ -228,8 +257,100 @@ export async function enableTriggerForCaller(input: {
 			instanceId: trigger.instanceId,
 			enablerUserId: actor.userId,
 			origin: 'enabled',
+			credentialMapping: mapping,
 		},
 	})
+	return { enablement, warnings }
+}
+
+/**
+ * Change which credentials the caller's own enablement runs with. Only the
+ * enabler may: an Owner can turn it off but never point it at other
+ * credentials. Picks are checked like an invoke's; needs not in `credentials`
+ * keep their stored credential. Audited. A pause on the old credentials
+ * lifts, and the next run checks the new ones.
+ */
+export async function updateEnablementCredentialsForCaller(input: {
+	env: Env
+	request: RequestContext
+	enablementId: string
+	credentials: CredentialCallMap
+}): Promise<EnablementRecord> {
+	const actor = requireActor(input.request)
+	const db = input.env.APP_DB
+	const orgId = input.request.org.id
+	const notFound = new McpCallerError(
+		`Enablement "${input.enablementId}" was not found.`,
+	)
+	const enablement = await getEnablementById({
+		db,
+		orgId,
+		id: input.enablementId,
+	})
+	if (!enablement || enablement.state === 'off') throw notFound
+	if (String(enablement.enablerUserId) !== String(actor.userId)) {
+		const access = await computeEffectivePermissions({
+			env: input.env,
+			request: input.request,
+		})
+		if (!access.isOwner) throw notFound
+		throw new McpCallerError(
+			'Only the enabler can change which credentials an enablement runs with. You can turn it off with enablementDisable.',
+		)
+	}
+	if (!enablement.packageId) {
+		throw new McpCallerError(
+			'This enablement has no package needs to pick for.',
+		)
+	}
+	await authorize(
+		{ env: input.env, request: input.request },
+		'package:execute',
+		packageResource({ id: enablement.packageId, userId: orgId }),
+	)
+	const { mapping } = await snapshotEnablementCredentials({
+		env: input.env,
+		request: input.request,
+		packageId: enablement.packageId,
+		map: input.credentials,
+		existing: enablement.credentialMapping ?? {},
+	})
+	if (!mapping) {
+		throw new McpCallerError('This package declares no credential needs.')
+	}
+	await runAppDbBatchWithOrgAudit({
+		appDb: db,
+		audit: orgAuditWriterFromRequest(input.env, input.request),
+		statements: [
+			buildSetEnablementCredentialMappingStatement({
+				db,
+				orgId,
+				id: enablement.id,
+				mapping,
+			}),
+		],
+		event: {
+			orgId,
+			action: 'enablement.credentials_updated',
+			resourceType: 'enablement',
+			resourceId: enablement.id,
+			details: {
+				packageId: enablement.packageId,
+				triggerKind: enablement.triggerKind,
+				triggerName: enablement.triggerName,
+				credentials: {
+					before: enablement.credentialMapping,
+					after: mapping,
+				},
+			},
+		},
+	})
+	if (enablement.state === 'paused' && pausedOnCredentialMapping(enablement)) {
+		await resumeEnablement({ db, orgId, id: enablement.id })
+	}
+	const updated = await getEnablementById({ db, orgId, id: enablement.id })
+	if (!updated) throw notFound
+	return updated
 }
 
 /**

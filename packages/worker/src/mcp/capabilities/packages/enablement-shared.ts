@@ -30,6 +30,15 @@ export const enablementSchema = z.object({
 		.nullable(),
 	paused_permission: z.string().nullable(),
 	paused_resource: z.object({ type: z.string(), id: z.string() }).nullable(),
+	credentials: z
+		.record(
+			z.string(),
+			z.array(z.object({ id: z.string(), scope: z.enum(['org', 'personal']) })),
+		)
+		.nullable()
+		.describe(
+			'Credential ids each run uses, by need key, stored when it was enabled or updated. Null: each run resolves its needs when it runs.',
+		),
 	origin: z.enum(['enabled', 'migrated']),
 	enabled_at: z.string(),
 	disabled_at: z.string().nullable(),
@@ -52,6 +61,7 @@ export function toEnablementOutput(
 			pause?.resourceType && pause.resourceId
 				? { type: pause.resourceType, id: pause.resourceId }
 				: null,
+		credentials: record.credentialMapping,
 		origin: record.origin,
 		enabled_at: record.enabledAt,
 		disabled_at: record.disabledAt,

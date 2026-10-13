@@ -228,9 +228,12 @@ credentials: { github: 'work', google: ['work','personal'], x: { name: 'work', s
 
 The CLI takes `--credential github=work` and `--credential x=org:work`. Enable
 takes the same map, resolved once at enable time to credential ids, so ambiguous
-or unbound errors surface when enabling. Only the enabler changes the choice
-(`enablementUpdate { credentials }`, audited). An admin can disable someone
-else's enablement but cannot point it at different credentials.
+or unbound errors surface when enabling. An enable without a map never fails on
+needs (enabling worked before needs existed): it stores the needs that
+auto-resolve, or nothing when any has no single candidate, in which case each
+run resolves its needs then and the response warns. Only the enabler changes the
+choice (`enablementUpdate { credentials }`, audited). An admin can disable
+someone else's enablement but cannot point it at different credentials.
 
 ### Resolution rules
 

@@ -5,6 +5,7 @@ import {
 import {
 	enablementPausedReasons,
 	enablementTriggerKinds,
+	type EnablementCredentialMapping,
 	type EnablementOrigin,
 	type EnablementPause,
 	type EnablementPausedReason,
@@ -28,6 +29,7 @@ type EnablementRow = {
 	paused_resource_id: string | null
 	paused_credential_id: string | null
 	paused_at: string | null
+	credential_mapping_json: string | null
 	origin: string
 	enabled_at: string
 	disabled_at: string | null
@@ -37,7 +39,7 @@ type EnablementRow = {
 const enablementColumns = `id, org_id, package_id, trigger_kind, trigger_name,
 	instance_id, enabler_user_id, state, paused_reason, paused_permission,
 	paused_resource_type, paused_resource_id, paused_credential_id, paused_at,
-	origin, enabled_at, disabled_at, updated_at`
+	credential_mapping_json, origin, enabled_at, disabled_at, updated_at`
 
 function isTriggerKind(value: string): value is EnablementTriggerKind {
 	return (enablementTriggerKinds as ReadonlyArray<string>).includes(value)
@@ -69,6 +71,32 @@ function toPause(row: EnablementRow): EnablementPause | null {
 	}
 }
 
+const mappingScopes: ReadonlySet<unknown> = new Set(['org', 'personal'])
+
+function toCredentialMapping(
+	json: string | null,
+): EnablementCredentialMapping | null {
+	if (json === null) return null
+	const parsed: unknown = JSON.parse(json)
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw new Error('Enablement credential mapping must be an object.')
+	}
+	const mapping: EnablementCredentialMapping = {}
+	for (const [key, picks] of Object.entries(parsed)) {
+		if (!Array.isArray(picks)) {
+			throw new Error(`Enablement credential mapping for ${key} is invalid.`)
+		}
+		mapping[key] = picks.map((pick: unknown) => {
+			const { id, scope } = (pick ?? {}) as { id?: unknown; scope?: unknown }
+			if (typeof id !== 'string' || !mappingScopes.has(scope)) {
+				throw new Error(`Enablement credential mapping for ${key} is invalid.`)
+			}
+			return { id, scope: scope as 'org' | 'personal' }
+		})
+	}
+	return mapping
+}
+
 function toRecord(row: EnablementRow): EnablementRecord {
 	if (!isTriggerKind(row.trigger_kind)) {
 		throw new Error(`Unknown enablement trigger kind: ${row.trigger_kind}`)
@@ -83,6 +111,7 @@ function toRecord(row: EnablementRow): EnablementRecord {
 		enablerUserId: personIdFromStored(row.enabler_user_id),
 		state: toState(row.state),
 		pause: toPause(row),
+		credentialMapping: toCredentialMapping(row.credential_mapping_json),
 		origin: row.origin === 'migrated' ? 'migrated' : 'enabled',
 		enabledAt: row.enabled_at,
 		disabledAt: row.disabled_at,
@@ -99,6 +128,7 @@ export type NewEnablement = {
 	instanceId: string
 	enablerUserId: string
 	origin: EnablementOrigin
+	credentialMapping?: EnablementCredentialMapping | null
 }
 
 export function buildInsertEnablementStatement(input: {
@@ -111,8 +141,9 @@ export function buildInsertEnablementStatement(input: {
 		.prepare(
 			`INSERT INTO enablements (
 				id, org_id, package_id, trigger_kind, trigger_name, instance_id,
-				enabler_user_id, state, origin, enabled_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, 'on', ?, ?, ?)`,
+				enabler_user_id, state, credential_mapping_json, origin, enabled_at,
+				updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, 'on', ?, ?, ?, ?)`,
 		)
 		.bind(
 			id,
@@ -122,6 +153,9 @@ export function buildInsertEnablementStatement(input: {
 			input.enablement.triggerName,
 			input.enablement.instanceId,
 			input.enablement.enablerUserId,
+			input.enablement.credentialMapping
+				? JSON.stringify(input.enablement.credentialMapping)
+				: null,
 			input.enablement.origin,
 			input.now,
 			input.now,
@@ -278,6 +312,23 @@ export async function resumeEnablement(input: {
 		.bind(now, input.id, input.orgId)
 		.run()
 	return (result.meta.changes ?? 0) > 0
+}
+
+/** The statement that replaces an enablement's credential mapping. */
+export function buildSetEnablementCredentialMappingStatement(input: {
+	db: D1Database
+	orgId: string
+	id: string
+	mapping: EnablementCredentialMapping
+	now?: string
+}) {
+	const now = input.now ?? new Date().toISOString()
+	return input.db
+		.prepare(
+			`UPDATE enablements SET credential_mapping_json = ?, updated_at = ?
+			 WHERE id = ? AND org_id = ? AND state <> 'off'`,
+		)
+		.bind(JSON.stringify(input.mapping), now, input.id, input.orgId)
 }
 
 /** Turn an enablement off for good. Returns false when it was already off. */

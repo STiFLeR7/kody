@@ -408,14 +408,16 @@ async function setup() {
 		kind: 'subscription' | 'cron' | 'webhook',
 		name: string,
 	) =>
-		await enableTriggerForCaller({
-			env,
-			baseUrl: 'https://kody.example',
-			request: await sessionFor(person),
-			packageIdOrKodyId: 'pkg-shared',
-			kind,
-			name,
-		})
+		(
+			await enableTriggerForCaller({
+				env,
+				baseUrl: 'https://kody.example',
+				request: await sessionFor(person),
+				packageIdOrKodyId: 'pkg-shared',
+				kind,
+				name,
+			})
+		).enablement
 
 	const enableWebhook = async (person: Person, endpointId: string) =>
 		await insertEnablement({

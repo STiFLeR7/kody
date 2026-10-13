@@ -18,7 +18,11 @@ import { type RequestContext } from '@kody-internal/shared/request-context.ts'
 import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { McpCallerError } from '#mcp/caller-error.ts'
 import { AuthorizationError } from '#worker/authorization/authorize.ts'
+import { enablementCredentialPause } from '#worker/enablements/credential-pause.ts'
+import { getEnablementById, pauseEnablement } from '#worker/enablements/repo.ts'
+import { type EnablementRecord } from '#worker/enablements/types.ts'
 import { getSavedPackageById } from '#worker/package-registry/repo.ts'
+import { enablementIdOf } from '#worker/request-context/request-context.ts'
 import { type PackageCredentialKind } from '#worker/package-registry/types.ts'
 import {
 	CredentialClientHandleError,
@@ -95,13 +99,15 @@ export class CredentialClientError extends McpCallerError {
 	}
 }
 
-function refusal(
+export function credentialClientRefusal(
 	code: CredentialClientErrorCode,
 	message: string,
 	extra: Partial<CredentialClientErrorBody> = {},
 ) {
 	return new CredentialClientError({ code, message, retryWith: [], ...extra })
 }
+
+const refusal = credentialClientRefusal
 
 /** The structured error for a failure from the door, else null. */
 export function toCredentialClientError(error: unknown) {
@@ -151,7 +157,7 @@ export type OpenedCredentialClient = {
 type Picked = { credential: UsableCredential; hint: string | null }
 
 /** What a need key asks for: the declared need, or the key read as a provider. */
-type NeedTarget = {
+export type NeedTarget = {
 	kind: PackageCredentialKind | null
 	provider: string
 	describe: string
@@ -204,7 +210,7 @@ function retryFor(key: string | null, credential: UsableCredential) {
 	}
 }
 
-async function loadPackageNeeds(input: {
+export async function loadPackageNeeds(input: {
 	env: Env
 	request: RequestContext
 	packageId: string
@@ -231,7 +237,10 @@ async function loadNeed(ctx: CredentialClientContext, key: string) {
 	return needs.find((need) => need.key === key) ?? null
 }
 
-function needTarget(key: string, need: CredentialNeed | null): NeedTarget {
+export function needTarget(
+	key: string,
+	need: CredentialNeed | null,
+): NeedTarget {
 	const kind = need?.kind ?? null
 	const provider = need?.provider ?? key
 	return {
@@ -332,7 +341,7 @@ function findByName(
  * An explicit call-map pick (resolution rule 2): the kind must match, and the
  * provider must match when both sides have one.
  */
-function pickExplicit(input: {
+export function pickExplicit(input: {
 	key: string
 	pick: CredentialPick
 	usable: ReadonlyArray<UsableCredential>
@@ -360,6 +369,93 @@ function pickExplicit(input: {
 	}
 }
 
+/**
+ * The one candidate for a key with no pick (resolution rule 3): zero is
+ * `credential_unbound`, two or more is `credential_ambiguous`.
+ */
+export function pickCandidate(input: {
+	key: string
+	target: NeedTarget
+	usable: ReadonlyArray<UsableCredential>
+}) {
+	const { key, target, usable } = input
+	return pickOne({
+		key,
+		candidates: usable.filter(
+			(candidate) =>
+				candidate.provider === target.provider &&
+				(target.kind === null || candidate.kind === target.kind),
+		),
+		possibleMatches: target.kind
+			? usable.filter(
+					(candidate) =>
+						candidate.kind === target.kind && candidate.provider === null,
+				)
+			: [],
+		describe: target.describe,
+	})
+}
+
+const runEnablementByRequest = new WeakMap<
+	RequestContext,
+	Promise<EnablementRecord | null>
+>()
+
+function loadRunEnablement(env: Env, request: RequestContext) {
+	const enablementId = enablementIdOf(request)
+	if (!enablementId) return Promise.resolve(null)
+	let pending = runEnablementByRequest.get(request)
+	if (!pending) {
+		pending = getEnablementById({
+			db: env.APP_DB,
+			orgId: request.org.id,
+			id: enablementId,
+		})
+		runEnablementByRequest.set(request, pending)
+	}
+	return pending
+}
+
+/**
+ * The credentials a triggered run's enablement stored for `key`, or null when
+ * it stored none. A stored credential the enabler can no longer use pauses the
+ * enablement; it never falls back to another credential.
+ */
+async function storedEnablementPicks(
+	ctx: CredentialClientContext,
+	key: string,
+	usable: ReadonlyArray<UsableCredential>,
+): Promise<Array<Picked> | null> {
+	const request = requireActorRequest(ctx)
+	const enablement = await loadRunEnablement(ctx.env, request)
+	const stored = enablement?.credentialMapping?.[key]
+	if (!enablement || !stored) return null
+	const picked: Array<Picked> = []
+	for (const pick of stored) {
+		const credential = usable.find(
+			(candidate) => candidate.id === pick.id && candidate.scope === pick.scope,
+		)
+		if (!credential) {
+			await pauseEnablement({
+				db: ctx.env.APP_DB,
+				orgId: enablement.orgId,
+				id: enablement.id,
+				pause: enablementCredentialPause({
+					key,
+					id: pick.id,
+					credential: null,
+				}),
+			})
+			throw refusal(
+				'credential_denied',
+				`The credential this enablement stored for "${key}" is deleted or no longer usable by its enabler, so the enablement paused. Its enabler can pick another with enablementUpdate.`,
+			)
+		}
+		picked.push({ credential, hint: null })
+	}
+	return picked
+}
+
 async function resolveKey(
 	ctx: CredentialClientContext,
 	key: string,
@@ -368,38 +464,27 @@ async function resolveKey(
 ): Promise<Array<Picked>> {
 	const target = needTarget(key, await loadNeed(ctx, key))
 	const picks = ctx.callMap?.get(key)
-	if (!picks) {
-		const credential = pickOne({
-			key,
-			candidates: usable.filter(
-				(candidate) =>
-					candidate.provider === target.provider &&
-					(target.kind === null || candidate.kind === target.kind),
-			),
-			possibleMatches: target.kind
-				? usable.filter(
-						(candidate) =>
-							candidate.kind === target.kind && candidate.provider === null,
-					)
-				: [],
-			describe: target.describe,
-		})
-		return [{ credential, hint: null }]
+	const stored = picks ? null : await storedEnablementPicks(ctx, key, usable)
+	const source = picks ? 'The credentials map' : 'This enablement'
+	if (!picks && !stored) {
+		return [{ credential: pickCandidate({ key, target, usable }), hint: null }]
 	}
-	if (mode === 'one' && picks.length === 0) {
+	const count = picks?.length ?? stored?.length ?? 0
+	if (mode === 'one' && count === 0) {
 		throw refusal(
 			'credential_unbound',
-			`The credentials map picks no credential for "${key}".`,
+			`${source} picks no credential for "${key}".`,
 		)
 	}
-	if (mode === 'one' && picks.length > 1) {
+	if (mode === 'one' && count > 1) {
 		throw refusal(
 			'invalid_request',
-			`The credentials map picks ${picks.length} credentials for "${key}". Call credentials("${key}") to get all of them.`,
+			`${source} picks ${count} credentials for "${key}". Call credentials("${key}") to get all of them.`,
 		)
 	}
+	if (stored) return stored
 	const picked = new Map<string, Picked>()
-	for (const pick of picks) {
+	for (const pick of picks ?? []) {
 		const one = pickExplicit({ key, pick, usable, target })
 		picked.set(one.credential.id, one)
 	}

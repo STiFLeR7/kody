@@ -230,6 +230,16 @@ await resend.fetch('/emails', { method: 'POST', body: JSON.stringify(email) })
   declare fails with `credential_need_unknown`, and in ad hoc code it is a
   warning. A pick with no provider opens with a `hint` to set one. A pick grants
   nothing; it chooses only among credentials you can Use.
+- Triggers store their picks. `enablementEnable` takes the same `credentials`
+  map and resolves the package's needs once to credential ids, so its runs never
+  switch to a credential added later. Without a map it stores the needs that
+  have one match; if any need has none or several, it stores nothing (each run
+  resolves then) and says so in `warnings`. Only the enabler changes the stored
+  picks, with `enablementUpdate { enablementId, credentials }` (audited). A
+  stored credential the enabler can no longer use pauses the enablement until
+  access is back or the enabler picks another; so does a need a republish adds
+  that has no single match, and the publish notes say when live enablements are
+  affected.
 - A client works only in the run that opened it. Under `kody execute --local`, a
   saved package that imports `credential` works the same; ad hoc local code
   needs a CLI release that adds `credential` to its `kody:runtime`.

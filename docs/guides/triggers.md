@@ -168,6 +168,10 @@ turns anything on.
   turns it on for you when nobody else has.
 - `enablementList` shows yours (`scope: "mine"`); Owners can list the whole org
   (`scope: "org"`). `enablementDisable` turns one off.
+- `enablementEnable { credentials }` picks which of your credentials fill the
+  package's credential needs; they are stored as ids. Change them later with
+  `enablementUpdate` (only you can; an Owner can only turn it off). See
+  [Credential slots](../use/packages.md#credential-slots-kodycredentials).
 - If you lose access to the package, the org, or a credential the run uses, the
   enablement pauses and events are dropped. It resumes by itself on the next
   event once access is back.

@@ -4,6 +4,7 @@ import { deletePackageCapability } from './delete-package.ts'
 import { enablementDisableCapability } from './enablement-disable.ts'
 import { enablementEnableCapability } from './enablement-enable.ts'
 import { enablementListCapability } from './enablement-list.ts'
+import { enablementUpdateCapability } from './enablement-update.ts'
 import { getGitRemoteCapability } from './get-git-remote.ts'
 import { getPackageCapability } from './get-package.ts'
 import { listPackagesCapability } from './list-packages.ts'
@@ -50,5 +51,6 @@ export const packagesDomain = defineDomain({
 		enablementListCapability,
 		enablementEnableCapability,
 		enablementDisableCapability,
+		enablementUpdateCapability,
 	],
 })

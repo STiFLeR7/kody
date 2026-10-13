@@ -53,6 +53,16 @@ export type EnablementPause = {
 
 export type EnablementOrigin = 'enabled' | 'migrated'
 
+/**
+ * The credentials an enablement runs with (ADR 0068), by need key: ids
+ * resolved once when it was enabled or updated, so its runs never drift to a
+ * credential added later. A need with no entry resolves on each run.
+ */
+export type EnablementCredentialMapping = Record<
+	string,
+	Array<{ id: string; scope: 'org' | 'personal' }>
+>
+
 export type EnablementRecord = {
 	id: string
 	orgId: OwnerId
@@ -63,6 +73,8 @@ export type EnablementRecord = {
 	enablerUserId: PersonId
 	state: EnablementState
 	pause: EnablementPause | null
+	/** Null for an enablement that resolves every need on each run. */
+	credentialMapping: EnablementCredentialMapping | null
 	origin: EnablementOrigin
 	enabledAt: string
 	disabledAt: string | null

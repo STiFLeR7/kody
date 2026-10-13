@@ -35,6 +35,8 @@ import {
 	getSecretProviderBinding,
 	normalizeProviderId,
 } from '#mcp/secrets/secret-providers/service.ts'
+import { checkEnablementCredentials } from './credential-mapping.ts'
+import { pausedOnCredentialMapping } from './credential-pause.ts'
 import { vaultPauseResourceType } from './pause-on-denial.ts'
 import {
 	listEnablementsForInstance,
@@ -250,7 +252,15 @@ async function checkEnablerAccess(input: {
 			},
 		}
 	}
-	const stored = await storedPauseResource(db, enablement)
+	const credentialPause = await checkEnablementCredentials({
+		env: input.env,
+		request,
+		enablement,
+	})
+	if (credentialPause) return { ok: false, pause: credentialPause }
+	const stored = pausedOnCredentialMapping(enablement)
+		? null
+		: await storedPauseResource(db, enablement)
 	if (stored) {
 		// Still blocked on the same credential: stay paused as is.
 		const allowed = stored.resources.some(
