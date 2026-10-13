@@ -548,6 +548,7 @@ const orgDocumentHeads: Record<string, DocumentHeadResolver> = {
 		}
 		return titleOnly('Connections')
 	},
+	[routePattern(routes.orgCredentials)]: titleOnly('Credentials'),
 	[routePattern(routes.orgEmail)]: titleOnly('Email inbox'),
 	[routePattern(routes.orgIntegrations)]: titleOnly('Integrations'),
 	[routePattern(routes.orgJobs)]: titleOnly('Jobs'),

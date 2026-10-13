@@ -73,7 +73,7 @@ test('account section switches keep the current page on screen (no loading flash
 		'Workspace sections',
 		[
 			{ link: 'Memories', heading: 'Memories' },
-			{ link: 'Secrets', heading: 'Secrets' },
+			{ link: 'Credentials', heading: 'Credentials' },
 			{ link: 'Connections', heading: 'Connections' },
 			{ link: 'Workflows', heading: 'Workflows' },
 			{ link: 'Webhooks', heading: 'Webhooks' },
@@ -115,7 +115,7 @@ test('account section switches keep the current page on screen (no loading flash
 	)
 })
 
-test('MCP servers are one click from /account and two from the account menu', async ({
+test('Credentials are one click from /account and two from the account menu', async ({
 	page,
 	seedE2eUser,
 	login,
@@ -144,7 +144,7 @@ test('MCP servers are one click from /account and two from the account menu', as
 		['Overview', 'overview'],
 		['Repositories', 'repositories'],
 		['Connections', 'connections'],
-		['Secrets', 'secrets'],
+		['Credentials', 'credentials'],
 		['Jobs', 'jobs'],
 		['Memories', 'memories'],
 	]) {
@@ -153,16 +153,16 @@ test('MCP servers are one click from /account and two from the account menu', as
 		).toHaveAttribute('href', `/@${user.username}/-/${section}`)
 	}
 	await accountRail
-		.getByRole('link', { name: 'MCP servers', exact: true })
+		.getByRole('link', { name: 'Credentials', exact: true })
 		.click()
-	await expect(page).toHaveURL(new RegExp(`/@${user.username}/-/mcp-servers$`))
+	await expect(page).toHaveURL(new RegExp(`/@${user.username}/-/credentials$`))
 	await expect(
-		page.getByRole('heading', { level: 1, name: 'MCP servers' }),
+		page.getByRole('heading', { level: 1, name: 'Credentials' }),
 	).toBeVisible()
 	await expect(
 		page
 			.getByRole('navigation', { name: 'Workspace sections' })
-			.getByRole('link', { name: 'MCP servers', exact: true }),
+			.getByRole('link', { name: 'Credentials', exact: true }),
 	).toHaveAttribute('aria-current', 'page')
 
 	// From an account page the switcher has no Manage block. The signup org
@@ -187,7 +187,7 @@ test('MCP servers are one click from /account and two from the account menu', as
 	for (const label of [
 		'Repositories',
 		'Connections',
-		'Secrets',
+		'Credentials',
 		'Jobs',
 		'Memories',
 		'Billing',
@@ -198,11 +198,11 @@ test('MCP servers are one click from /account and two from the account menu', as
 	}
 	await page
 		.getByTestId('org-overview-access')
-		.getByRole('link', { name: /^MCP servers/ })
+		.getByRole('link', { name: /^Credentials/ })
 		.click()
-	await expect(page).toHaveURL(new RegExp(`/@${user.username}/-/mcp-servers$`))
+	await expect(page).toHaveURL(new RegExp(`/@${user.username}/-/credentials$`))
 	await expect(
-		page.getByRole('heading', { level: 1, name: 'MCP servers' }),
+		page.getByRole('heading', { level: 1, name: 'Credentials' }),
 	).toBeVisible()
 
 	// The organizations list opens the signup org's overview too.

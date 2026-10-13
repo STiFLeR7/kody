@@ -374,7 +374,7 @@ test('workspace landing opens Repositories so the rail is one click away', () =>
 	expect(workspaceLandingItem(null).href).toBe('/account')
 })
 
-test('account rail opens the signup workspace: overview, repositories, connections, MCP servers, secrets, jobs, memories', () => {
+test('account rail opens the signup workspace: overview, repositories, connections, credentials, jobs, memories', () => {
 	const groups = accountRailGroups({ workspaceSlug: 'jane-old' })
 	expect(groups.map((group) => group.label)).toEqual([null, 'Workspace'])
 	expect(
@@ -383,8 +383,7 @@ test('account rail opens the signup workspace: overview, repositories, connectio
 		['Overview', '/@jane-old/-/overview', 'home'],
 		['Repositories', '/@jane-old/-/repositories', 'box'],
 		['Connections', '/@jane-old/-/connections', 'link'],
-		['MCP servers', '/@jane-old/-/mcp-servers', 'server'],
-		['Secrets', '/@jane-old/-/secrets', 'key'],
+		['Credentials', '/@jane-old/-/credentials', 'key'],
 		['Jobs', '/@jane-old/-/jobs', 'briefcase'],
 		['Memories', '/@jane-old/-/memories', 'book'],
 	])
@@ -430,9 +429,20 @@ test('workspace rail groups what the organization owns and keeps its slug in eve
 	expect(items.find((item) => item.label === 'Repositories')?.href).toBe(
 		'/@jane/-/repositories',
 	)
-	expect(items.find((item) => item.label === 'Secret providers')?.href).toBe(
+	const credentials = items.find((item) => item.label === 'Credentials')
+	expect(credentials?.href).toBe('/@jane/-/credentials')
+	// The Key, OAuth, MCP server, and vault editors still count as Credentials.
+	for (const path of [
+		'/@jane/-/credentials',
+		'/@jane/-/secrets/user/OPENAI_API_KEY',
+		'/@jane/-/integrations/github',
+		'/@jane/-/mcp-servers/new',
 		'/@jane/-/secret-providers',
-	)
+	]) {
+		expect(credentials && isAccountNavItemActive(credentials, path), path).toBe(
+			true,
+		)
+	}
 	const billing = items.find((item) => item.label === 'Billing')
 	expect(billing?.href).toBe('/@jane/-/billing')
 	expect(billing && isAccountNavItemActive(billing, '/@jane/-/billing')).toBe(
@@ -477,10 +487,7 @@ test('workspace rail for a team organization matches the personal section shape'
 		'Workflows',
 		'Webhooks',
 		'Connections',
-		'Integrations',
-		'MCP servers',
-		'Secrets',
-		'Secret providers',
+		'Credentials',
 		'Memories',
 		'Email',
 		'Activity',
@@ -495,10 +502,7 @@ test('workspace rail for a team organization matches the personal section shape'
 		'Workflows',
 		'Webhooks',
 		'Connections',
-		'Integrations',
-		'MCP servers',
-		'Secrets',
-		'Secret providers',
+		'Credentials',
 		'Memories',
 		'Email',
 		'Activity',
@@ -527,19 +531,8 @@ test('workspace rail for a team organization matches the personal section shape'
 				'/@acme/-/webhooks',
 			],
 		],
-		[
-			'Access',
-			['/@acme/-/connections', '/@acme/-/integrations', '/@acme/-/mcp-servers'],
-		],
-		[
-			'Data',
-			[
-				'/@acme/-/secrets',
-				'/@acme/-/secret-providers',
-				'/@acme/-/memories',
-				'/@acme/-/email',
-			],
-		],
+		['Access', ['/@acme/-/connections', '/@acme/-/credentials']],
+		['Data', ['/@acme/-/memories', '/@acme/-/email']],
 		['Activity', ['/@acme/-/activity', '/@acme/-/waiting']],
 		[
 			'Organization',
@@ -569,10 +562,7 @@ test('workspace rail for a team organization matches the personal section shape'
 		'Workflows',
 		'Webhooks',
 		'Connections',
-		'Integrations',
-		'MCP servers',
-		'Secrets',
-		'Secret providers',
+		'Credentials',
 		'Memories',
 		'Email',
 		'Activity',
@@ -599,10 +589,7 @@ test('workspace rail for a team organization matches the personal section shape'
 		'Workflows',
 		'Webhooks',
 		'Connections',
-		'Integrations',
-		'MCP servers',
-		'Secrets',
-		'Secret providers',
+		'Credentials',
 		'Memories',
 		'Email',
 		'Activity',

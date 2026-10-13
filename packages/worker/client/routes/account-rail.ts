@@ -139,8 +139,7 @@ export function accountRailGroups(input: {
 				overviewRailItem(slug),
 				repositoriesRailItem(slug),
 				connectionsRailItem(slug),
-				mcpServersRailItem(slug),
-				secretsRailItem(slug),
+				credentialsRailItem(slug),
 				jobsRailItem(slug),
 				memoriesRailItem(slug),
 			],
@@ -286,23 +285,29 @@ function connectionsRailItem(
 	}
 }
 
-function mcpServersRailItem(
+/**
+ * One home for every credential kind. The Key, OAuth, MCP server, and vault
+ * editors still live on their own pages, so those count as Credentials too.
+ */
+function credentialsRailItem(
 	orgSlug: string | null | undefined,
 ): AccountRailItem {
 	return {
-		href: orgSectionHref(orgSlug, 'mcp-servers'),
-		label: 'MCP servers',
-		icon: 'server',
-		description: 'Remote MCP servers whose tools Kody can call.',
-	}
-}
-
-function secretsRailItem(orgSlug: string | null | undefined): AccountRailItem {
-	return {
-		href: orgSectionHref(orgSlug, 'secrets'),
-		label: 'Secrets',
+		href: orgSectionHref(orgSlug, 'credentials'),
+		label: 'Credentials',
 		icon: 'key',
-		description: 'API keys and tokens your packages use.',
+		alsoActiveFor: orgSlug
+			? (
+					[
+						'secrets',
+						'integrations',
+						'mcp-servers',
+						'secret-providers',
+					] as const
+				).map((section) => orgResourcePath(orgSlug, section))
+			: [],
+		description:
+			'Keys, OAuth connections, MCP servers, and vaults Kody uses for you.',
 	}
 }
 
@@ -356,27 +361,11 @@ function workspaceResourceGroups(
 		},
 		{
 			label: 'Access',
-			items: [
-				connectionsRailItem(orgSlug),
-				{
-					href: orgSectionHref(orgSlug, 'integrations'),
-					label: 'Integrations',
-					icon: 'plug',
-					description: 'Services you connect so Kody can use them.',
-				},
-				mcpServersRailItem(orgSlug),
-			],
+			items: [connectionsRailItem(orgSlug), credentialsRailItem(orgSlug)],
 		},
 		{
 			label: 'Data',
 			items: [
-				secretsRailItem(orgSlug),
-				{
-					href: orgSectionHref(orgSlug, 'secret-providers'),
-					label: 'Secret providers',
-					icon: 'key',
-					description: 'Bind a package to a provider such as 1password.',
-				},
 				memoriesRailItem(orgSlug),
 				{
 					href: orgSectionHref(orgSlug, 'email'),

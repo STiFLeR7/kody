@@ -17,6 +17,7 @@ import {
 import { renderAppPage } from '#app/ssr-render.tsx'
 import { createAccountActivityHandler } from '#app/handlers/account-activity.ts'
 import { createAccountConnectionsHandler } from '#app/handlers/account-connected-agents.ts'
+import { createAccountCredentialsHandler } from '#app/handlers/account-credentials.ts'
 import { createAccountEmailHandler } from '#app/handlers/account-email.ts'
 import { createAccountIntegrationsHandler } from '#app/handlers/account-integrations.ts'
 import { createAccountJobsHandler } from '#app/handlers/account-jobs.ts'
@@ -55,6 +56,8 @@ function sectionHandler(
 			return createAccountActivityHandler(env)
 		case 'connections':
 			return createAccountConnectionsHandler(env)
+		case 'credentials':
+			return createAccountCredentialsHandler(env)
 		case 'email':
 			return createAccountEmailHandler(env)
 		case 'integrations':
@@ -118,6 +121,8 @@ function sectionParams(
 				return { serverId: first }
 			}
 			return {}
+		case 'credentials':
+			return first ? { credentialId: first } : {}
 		case 'repositories':
 		case 'secret-providers':
 		case 'secrets':

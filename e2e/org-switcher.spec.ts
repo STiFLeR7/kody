@@ -105,7 +105,7 @@ test('org switcher opens under its trigger, lists orgs, and closes like a menu',
 	await page.goto(`/@pinned-${runId}/-/settings`)
 	await waitForClientHydration(page)
 	// Team workspace rail matches the personal shape: same resource sections
-	// (MCP servers, Integrations, …) plus Organization management links.
+	// (Credentials, Connections, …) plus Organization management links.
 	const teamRail = page.getByRole('navigation', { name: 'Workspace sections' })
 	for (const label of [
 		'Overview',
@@ -114,10 +114,7 @@ test('org switcher opens under its trigger, lists orgs, and closes like a menu',
 		'Workflows',
 		'Webhooks',
 		'Connections',
-		'Integrations',
-		'MCP servers',
-		'Secrets',
-		'Secret providers',
+		'Credentials',
 		'Memories',
 		'Email',
 		'Activity',
@@ -138,8 +135,8 @@ test('org switcher opens under its trigger, lists orgs, and closes like a menu',
 		teamRail.getByRole('link', { name: 'Overview', exact: true }),
 	).toHaveAttribute('href', `/@pinned-${runId}`)
 	await expect(
-		teamRail.getByRole('link', { name: 'MCP servers', exact: true }),
-	).toHaveAttribute('href', `/@pinned-${runId}/-/mcp-servers`)
+		teamRail.getByRole('link', { name: 'Credentials', exact: true }),
+	).toHaveAttribute('href', `/@pinned-${runId}/-/credentials`)
 	await expect(page.getByTestId('org-switcher')).toHaveAccessibleName(
 		`@pinned-${runId}: organizations and account`,
 	)
@@ -148,16 +145,16 @@ test('org switcher opens under its trigger, lists orgs, and closes like a menu',
 	).toBeVisible()
 	await expect(page.getByTestId('delete-org')).toBeVisible()
 
-	// Team orgs own their secrets, jobs, connections, and repositories, so the
-	// rail opens each of them on the team org.
+	// Team orgs own their credentials, jobs, connections, and repositories, so
+	// the rail opens each of them on the team org.
 	const rail = page.getByRole('navigation', { name: 'Workspace sections' })
-	await rail.getByRole('link', { name: 'Secrets', exact: true }).click()
-	await expect(page).toHaveURL(new RegExp(`/@pinned-${runId}/-/secrets$`))
+	await rail.getByRole('link', { name: 'Credentials', exact: true }).click()
+	await expect(page).toHaveURL(new RegExp(`/@pinned-${runId}/-/credentials$`))
 	await expect(
-		page.getByRole('heading', { level: 1, name: 'Secrets' }),
+		page.getByRole('heading', { level: 1, name: 'Credentials' }),
 	).toBeVisible()
 	await expect(
-		rail.getByRole('link', { name: 'Secrets', exact: true }),
+		rail.getByRole('link', { name: 'Credentials', exact: true }),
 	).toHaveAttribute('aria-current', 'page')
 	await rail.getByRole('link', { name: 'Jobs', exact: true }).click()
 	await expect(page).toHaveURL(new RegExp(`/@pinned-${runId}/-/jobs$`))

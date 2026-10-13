@@ -270,6 +270,7 @@ registerPreloadPatterns(
 		routePattern(routes.accountOrganizations),
 		routePattern(routes.orgActivity),
 		routePattern(routes.orgConnections),
+		routePattern(routes.orgCredentials),
 		routePattern(routes.orgEmail),
 		routePattern(routes.orgIntegrations),
 		routePattern(routes.orgJobs),

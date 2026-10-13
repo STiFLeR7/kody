@@ -61,6 +61,7 @@ import { createAccountActivityApiHandler } from '#app/handlers/account-activity.
 import { createAccountJobsApiHandler } from '#app/handlers/account-jobs.ts'
 import { createAccountWorkflowsApiHandler } from '#app/handlers/account-workflows.ts'
 import { createAccountWebhooksApiHandler } from '#app/handlers/account-webhooks.ts'
+import { createAccountCredentialsApiHandler } from '#app/handlers/account-credentials.ts'
 import {
 	createAccountMcpServersApiHandler,
 	createAccountMcpServersOauthCallbackHandler,
@@ -529,6 +530,7 @@ export function createAppRouter(env: Env) {
 			accountEmailClaimRelease: createAccountEmailClaimReleaseHandler(env),
 			accountPassword: createAccountPasswordHandler(env),
 			accountResendVerification: createAccountResendVerificationHandler(env),
+			accountCredentialsApi: createAccountCredentialsApiHandler(env),
 			accountSecretsApi: createAccountSecretsApiHandler(env),
 			accountSecretsApiPost: createAccountSecretsApiHandler(env),
 			accountSecretProvidersApi: createAccountSecretProvidersApiHandler(env),
@@ -627,6 +629,7 @@ export function createAppRouter(env: Env) {
 			orgBillingSuccess: createOrgBillingSuccessHandler(env),
 			orgBillingPortal: createOrgBillingPortalHandler(env),
 			orgConnections: createOrgSectionHandler(env, 'connections'),
+			orgCredentials: createOrgSectionHandler(env, 'credentials'),
 			orgEmail: createOrgSectionHandler(env, 'email'),
 			orgIntegrations: createOrgSectionHandler(env, 'integrations'),
 			orgJobs: createOrgSectionHandler(env, 'jobs'),
