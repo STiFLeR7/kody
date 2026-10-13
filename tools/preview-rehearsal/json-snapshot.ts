@@ -487,7 +487,8 @@ function keyedArrayView(
 		) {
 			continue
 		}
-		const keyed: Record<string, unknown> = {}
+		// Null prototype so identity values like "__proto__" stay own keys.
+		const keyed: Record<string, unknown> = Object.create(null)
 		const seen = new Set<string>()
 		let unique = true
 		for (const item of items) {
@@ -509,7 +510,7 @@ export function diffSnapshots(
 	after: unknown,
 	path = '',
 ): Array<SnapshotDifference> {
-	if (path === '.takenAt' || path.endsWith('.observed')) return []
+	if (path === '.takenAt') return []
 	if (
 		before &&
 		after &&
@@ -537,15 +538,16 @@ export function diffSnapshots(
 			}
 		}
 		const keys = new Set([...Object.keys(before), ...Object.keys(after)])
-		return [...keys]
-			.sort()
-			.flatMap((key) =>
-				diffSnapshots(
-					(before as Record<string, unknown>)[key],
-					(after as Record<string, unknown>)[key],
-					Array.isArray(before) ? `${path}[${key}]` : `${path}.${key}`,
-				),
+		return [...keys].sort().flatMap((key) => {
+			// Skip people/metrics `observed` object properties only — not a
+			// keyed identity segment that happens to be named "observed".
+			if (!Array.isArray(before) && key === 'observed') return []
+			return diffSnapshots(
+				(before as Record<string, unknown>)[key],
+				(after as Record<string, unknown>)[key],
+				Array.isArray(before) ? `${path}[${key}]` : `${path}.${key}`,
 			)
+		})
 	}
 	return JSON.stringify(before) === JSON.stringify(after)
 		? []

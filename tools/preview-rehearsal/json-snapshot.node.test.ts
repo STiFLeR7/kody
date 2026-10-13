@@ -91,6 +91,35 @@ test('diffSnapshots keys D1 databases by role and tables by name', () => {
 	])
 })
 
+test('diffSnapshots keeps keyed identities named observed and __proto__', () => {
+	expect(
+		diffSnapshots(
+			{
+				databases: [{ role: 'app', tables: [{ table: 'observed', rows: 1 }] }],
+			},
+			{
+				databases: [{ role: 'app', tables: [{ table: 'observed', rows: 2 }] }],
+			},
+		),
+	).toEqual([
+		{ path: '.databases.app.tables.observed.rows', before: 1, after: 2 },
+	])
+	expect(
+		diffSnapshots(
+			{ databases: [{ role: 'app', tables: [] }] },
+			{
+				databases: [{ role: 'app', tables: [{ table: '__proto__', rows: 1 }] }],
+			},
+		),
+	).toEqual([
+		{
+			path: '.databases.app.tables.__proto__',
+			before: undefined,
+			after: { table: '__proto__', rows: 1 },
+		},
+	])
+})
+
 test('findPackagesListedByMoreThanOneOwner flags a package injected into another org', () => {
 	expect(
 		findPackagesListedByMoreThanOneOwner({

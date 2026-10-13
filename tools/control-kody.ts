@@ -842,11 +842,12 @@ export async function requestAsSession(input: {
 	}
 	applySessionRequestHeaders(input.spec, headers)
 	if (input.cookieHeader) headers.Cookie = input.cookieHeader
+	const requestBody = await applySessionRequestBody(input.spec, headers)
 	const startedAt = performance.now()
 	const response = await fetchImpl(`${input.origin}${input.spec.path}`, {
 		method: input.spec.method,
 		headers,
-		body: await applySessionRequestBody(input.spec, headers),
+		body: requestBody,
 	})
 	const ttfbMs = Math.round(performance.now() - startedAt)
 	const responseHeaders: Record<string, string> = {}
