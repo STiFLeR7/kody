@@ -78,7 +78,7 @@ async function seedOwnerSessionCookie() {
 
 async function ensureCustomHostnameSchema() {
 	// Workers-unit D1 starts empty; suites create the tables they touch.
-	// Production applies migration 0128. CREATE IF NOT EXISTS covers both.
+	// Production applies migration 0130. CREATE IF NOT EXISTS covers both.
 	await env.APP_DB.prepare(
 		`CREATE TABLE IF NOT EXISTS feature_flags (
 			key TEXT PRIMARY KEY NOT NULL,
