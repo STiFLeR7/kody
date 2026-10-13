@@ -2,7 +2,10 @@
  * Pending MCP OAuth attempts are bound to the server row id and OAuth client
  * id they started with (kody-celld #50, #55 / #57 / #65). One predicate is used
  * at callback start and again immediately before persisting the grant so those
- * two moments cannot drift apart.
+ * two moments cannot drift apart. Hosted also stamps owner org + person.
+ *
+ * Client identity is the OAuth client **id** only: rotating a secret for the
+ * same client id is not an identity change.
  */
 export function oauthAttemptIdentityMatches(input: {
 	pendingServerId: string | null | undefined
@@ -16,6 +19,30 @@ export function oauthAttemptIdentityMatches(input: {
 		input.pendingClientId &&
 		input.clientId === input.pendingClientId,
 	)
+}
+
+/** Owner org + initiating/consenting person stamped on the pending attempt. */
+export function oauthAttemptActorMatches(input: {
+	pendingOwnerOrgId: string | null | undefined
+	pendingPersonId: string | null | undefined
+	ownerOrgId: string | null | undefined
+	personId: string | null | undefined
+}): boolean {
+	return Boolean(
+		input.pendingOwnerOrgId &&
+		input.ownerOrgId === input.pendingOwnerOrgId &&
+		input.pendingPersonId &&
+		input.personId === input.pendingPersonId,
+	)
+}
+
+/**
+ * Where to send the person after a refused grant write. Prefer the shared
+ * credential creation page when it exists on main; until then MCP reconnect
+ * lives on the account MCP servers list.
+ */
+export function mcpOAuthAttemptReconnectHref() {
+	return '/account/mcp-servers'
 }
 
 /** Origin of an MCP server URL, or null when the URL cannot be parsed. */
@@ -99,15 +126,15 @@ export function authorizationServerOriginFromDiscovery(
 }
 
 /**
- * Fail-closed copy when the server row, URL/origin, client, or discovered AS
- * origin no longer matches the attempt. Includes a reconnect link so agents
- * and UI can send the person back to start a fresh flow.
+ * Fail-closed copy when the server row, URL/origin, client, actor, or
+ * discovered AS origin no longer matches the attempt. Includes a reconnect
+ * link so agents and UI can send the person back to start a fresh flow.
  */
 export function mcpOAuthAttemptIdentityInvalidMessage(
 	serverName?: string | null,
 ) {
 	const label = serverName?.trim() ? ` "${serverName.trim()}"` : ''
-	return `MCP server${label} was removed or changed while authorizing; nothing was saved. Reconnect at /account/mcp-servers.`
+	return `MCP server${label} was removed or changed while authorizing; nothing was saved. Reconnect at ${mcpOAuthAttemptReconnectHref()}.`
 }
 
 /**

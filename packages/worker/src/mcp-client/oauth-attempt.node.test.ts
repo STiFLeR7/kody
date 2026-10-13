@@ -16,6 +16,8 @@ test('oauthAttemptMatchesLiveServer fences server id, url/origin, client, and AS
 		serverId: 'srv-1',
 		serverUrl,
 		clientId: 'client-1',
+		ownerOrgId: 'org-1',
+		personId: 'person-1',
 		discovery: {
 			authorizationServerMetadata: {
 				issuer: 'https://auth.example',
@@ -29,6 +31,8 @@ test('oauthAttemptMatchesLiveServer fences server id, url/origin, client, and AS
 		serverId: 'srv-1',
 		serverUrl,
 		clientId: 'client-1',
+		ownerOrgId: 'org-1',
+		personId: 'person-1',
 		name: 'docs',
 	}
 	const discovery = {
@@ -61,6 +65,22 @@ test('oauthAttemptMatchesLiveServer fences server id, url/origin, client, and AS
 		oauthAttemptMatchesLiveServer({
 			pending,
 			live: { ...live, clientId: null },
+			discovery,
+		}),
+	).toBe(false)
+
+	// Owner org or person changed mid-flow.
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending,
+			live: { ...live, ownerOrgId: 'org-other' },
+			discovery,
+		}),
+	).toBe(false)
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending,
+			live: { ...live, personId: 'person-other' },
 			discovery,
 		}),
 	).toBe(false)
@@ -120,6 +140,8 @@ test('attempt identity storage round-trips and rejects malformed rows', async ()
 		serverId: 'srv-1',
 		serverUrl,
 		clientId: 'client-1',
+		ownerOrgId: 'org-1',
+		personId: 'person-1',
 	})
 	expect(identity).not.toBeNull()
 	await writeMcpOAuthAttemptIdentity(storage, identity!)

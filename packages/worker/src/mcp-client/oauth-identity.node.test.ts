@@ -4,6 +4,8 @@ import {
 	authorizationServerOriginFromDiscovery,
 	discoveryMatchesAttemptAuthorizationServerOrigin,
 	mcpOAuthAttemptIdentityInvalidMessage,
+	mcpOAuthAttemptReconnectHref,
+	oauthAttemptActorMatches,
 	oauthAttemptIdentityMatches,
 } from './oauth-identity.ts'
 
@@ -80,6 +82,41 @@ test('assertEndpointsOnIssuerOrigin refuses cross-origin authorization and token
 	).not.toThrow()
 })
 
+test('oauthAttemptActorMatches requires both pending ids and an exact match', () => {
+	expect(
+		oauthAttemptActorMatches({
+			pendingOwnerOrgId: 'org-1',
+			pendingPersonId: 'person-1',
+			ownerOrgId: 'org-1',
+			personId: 'person-1',
+		}),
+	).toBe(true)
+	expect(
+		oauthAttemptActorMatches({
+			pendingOwnerOrgId: 'org-1',
+			pendingPersonId: 'person-1',
+			ownerOrgId: 'org-2',
+			personId: 'person-1',
+		}),
+	).toBe(false)
+	expect(
+		oauthAttemptActorMatches({
+			pendingOwnerOrgId: 'org-1',
+			pendingPersonId: 'person-1',
+			ownerOrgId: 'org-1',
+			personId: 'person-2',
+		}),
+	).toBe(false)
+	expect(
+		oauthAttemptActorMatches({
+			pendingOwnerOrgId: null,
+			pendingPersonId: 'person-1',
+			ownerOrgId: 'org-1',
+			personId: 'person-1',
+		}),
+	).toBe(false)
+})
+
 test('discovery AS origin helpers and reconnect copy stay fail-closed', () => {
 	expect(
 		authorizationServerOriginFromDiscovery({
@@ -109,8 +146,9 @@ test('discovery AS origin helpers and reconnect copy stay fail-closed', () => {
 			},
 		}),
 	).toBe(false)
+	expect(mcpOAuthAttemptReconnectHref()).toBe('/account/mcp-servers')
 	expect(mcpOAuthAttemptIdentityInvalidMessage('docs')).toContain(
-		'Reconnect at /account/mcp-servers',
+		`Reconnect at ${mcpOAuthAttemptReconnectHref()}`,
 	)
 	expect(mcpOAuthAttemptIdentityInvalidMessage('docs')).toContain('"docs"')
 })

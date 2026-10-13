@@ -75,7 +75,12 @@ import {
 	sanitizePersistedMcpServerOptions,
 	sanitizeStoredMcpSessions,
 } from './restore.ts'
-import { mcpOAuthAttemptStorageKey } from './oauth-attempt.ts'
+import {
+	mcpOAuthAttemptStorageKey,
+	readMcpOAuthAttemptIdentity,
+	writeMcpOAuthAttemptIdentity,
+	type McpOAuthAttemptActor,
+} from './oauth-attempt.ts'
 import { extractMcpServerIdFromOAuthState } from './oauth-state.ts'
 import { withStaticTransportHeaders } from './transport-headers.ts'
 import { clearLiveMcpTransportSession } from './transport-session.ts'
@@ -144,6 +149,8 @@ class McpClientHubBase extends DurableObject<Env> {
 	/** Public ids of stored pre-registered clients, for snapshots. */
 	private readonly preRegisteredClientIds = new Map<string, string>()
 	private readonly oauthClientChangeLocks = new Map<string, Promise<void>>()
+	/** Actor for the current RPC: stamped onto new OAuth attempts and re-checked. */
+	private oauthActor: McpOAuthAttemptActor | null = null
 
 	constructor(state: DurableObjectState, env: Env) {
 		super(state, env)
@@ -180,10 +187,22 @@ class McpClientHubBase extends DurableObject<Env> {
 		})
 	}
 
+	private rememberOAuthActor(actor: McpOAuthAttemptActor | null | undefined) {
+		if (!actor?.ownerOrgId?.trim() || !actor.personId?.trim()) {
+			this.oauthActor = null
+			return
+		}
+		this.oauthActor = {
+			ownerOrgId: actor.ownerOrgId.trim(),
+			personId: actor.personId.trim(),
+		}
+	}
+
 	/**
 	 * Live hub row + expected OAuth client for an in-flight attempt fence.
 	 * Pre-registered clients win over SQL `client_id` (DCR/CIMD), matching how
-	 * the provider presents credentials to the authorization server.
+	 * the provider presents credentials to the authorization server. Owner org
+	 * and person come from the current RPC actor (add/reconnect/consent/callback).
 	 */
 	private resolveLiveOAuthServerIdentity(serverId: string) {
 		const row = this.manager
@@ -196,8 +215,36 @@ class McpClientHubBase extends DurableObject<Env> {
 			serverId: row.id,
 			serverUrl: row.server_url,
 			clientId: preRegisteredClientId ?? row.client_id,
+			ownerOrgId: this.oauthActor?.ownerOrgId ?? null,
+			personId: this.oauthActor?.personId ?? null,
 			name: row.name,
 		})
+	}
+
+	/**
+	 * Consent Continue rebinds the pending attempt to the person who approved
+	 * leaving Kody for the provider, so a different org admin can finish the
+	 * flow without failing the person-id fence.
+	 */
+	async bindOAuthAttemptActor(input: {
+		serverId: string
+		actor: McpOAuthAttemptActor
+	}): Promise<{ ok: boolean }> {
+		await this.ensureRestored()
+		this.rememberOAuthActor(input.actor)
+		const pending = await readMcpOAuthAttemptIdentity(
+			this.ctx.storage,
+			input.serverId,
+		)
+		if (!pending) return { ok: false }
+		if (pending.ownerOrgId !== this.oauthActor?.ownerOrgId) {
+			return { ok: false }
+		}
+		await writeMcpOAuthAttemptIdentity(this.ctx.storage, {
+			...pending,
+			personId: this.oauthActor.personId,
+		})
+		return { ok: true }
 	}
 
 	private async readSealedPreRegisteredOAuthClient(serverId: string) {
@@ -387,6 +434,7 @@ class McpClientHubBase extends DurableObject<Env> {
 		name: string
 		url: string
 		callbackUrl: string
+		actor?: McpOAuthAttemptActor | null
 		/**
 		 * Optional static request headers (for example Authorization: Bearer …).
 		 * Persisted in the Agents SDK `server_options` blob alongside the server
@@ -395,6 +443,7 @@ class McpClientHubBase extends DurableObject<Env> {
 		headers?: Record<string, string>
 	}): Promise<McpHubConnectResult> {
 		await this.ensureRestored()
+		this.rememberOAuthActor(input.actor)
 		await this.forgetLegacyHandshakeFallback(input.serverId)
 		this.clearIncompleteDiscoverStamp(input.serverId)
 		this.tokenPresence.delete(input.serverId)
@@ -444,8 +493,10 @@ class McpClientHubBase extends DurableObject<Env> {
 	async reconnectServer(input: {
 		serverId: string
 		callbackUrl: string
+		actor?: McpOAuthAttemptActor | null
 	}): Promise<McpHubConnectResult> {
 		await this.ensureRestored()
+		this.rememberOAuthActor(input.actor)
 		await this.manager.waitForConnections({
 			timeout: connectionSettleTimeoutMs,
 		})
@@ -516,8 +567,10 @@ class McpClientHubBase extends DurableObject<Env> {
 		serverId: string
 		callbackUrl: string
 		client: SealedMcpPreRegisteredOAuthClient | null
+		actor?: McpOAuthAttemptActor | null
 	}): Promise<McpHubOAuthClientChange> {
 		await this.ensureRestored()
+		this.rememberOAuthActor(input.actor)
 		return this.serializeOAuthClientChange(input.serverId, async () => {
 			const row = this.manager
 				.listServers()
@@ -650,8 +703,10 @@ class McpClientHubBase extends DurableObject<Env> {
 	async handleOAuthCallback(input: {
 		url: string
 		callbackUrl: string
+		actor?: McpOAuthAttemptActor | null
 	}): Promise<McpServerOAuthCallbackOutcome> {
 		await this.ensureRestored()
+		this.rememberOAuthActor(input.actor)
 		const request = new Request(input.url, { method: 'GET' })
 		const stateServerId = extractMcpServerIdFromOAuthState(
 			new URL(request.url).searchParams.get('state'),

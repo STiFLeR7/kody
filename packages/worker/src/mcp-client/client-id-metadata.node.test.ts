@@ -259,6 +259,8 @@ test('OAuth attempt identity: happy path, remove/re-add, client mismatch, and re
 		serverId: 'server-home',
 		serverUrl: 'https://mcp.example/mcp',
 		clientId: 'client-1',
+		ownerOrgId: 'org-1',
+		personId: 'person-1',
 		name: 'docs',
 	}
 	let currentLive: typeof live | null = { ...live }
@@ -272,6 +274,8 @@ test('OAuth attempt identity: happy path, remove/re-add, client mismatch, and re
 		serverId: live.serverId,
 		serverUrl: live.serverUrl,
 		clientId: live.clientId,
+		ownerOrgId: live.ownerOrgId,
+		personId: live.personId,
 		discovery: discoveryOnIssuer,
 	})
 	expect(pending).not.toBeNull()
@@ -305,6 +309,15 @@ test('OAuth attempt identity: happy path, remove/re-add, client mismatch, and re
 		provider.saveTokens(bearer('other-at', 'other-rt')),
 	).rejects.toThrow(/Reconnect at \/account\/mcp-servers/)
 	expect(values.get(tokenKey)).toEqual(bearer('refreshed-at', 'grant-rt'))
+
+	// Person mismatch mid-flow.
+	currentLive = { ...live }
+	await writeMcpOAuthAttemptIdentity(storage, pending!)
+	currentLive = { ...live, personId: 'person-other' }
+	await expect(
+		provider.saveTokens(bearer('person-at', 'person-rt')),
+	).rejects.toBeInstanceOf(McpOAuthAttemptIdentityError)
+	expect(values.get(tokenKey)).toEqual(bearer('refreshed-at', 'grant-rt'))
 })
 
 test('checkState fails closed when the live server no longer matches the attempt', async () => {
@@ -313,6 +326,8 @@ test('checkState fails closed when the live server no longer matches the attempt
 		serverId: 'server-home',
 		serverUrl: 'https://mcp.example/mcp',
 		clientId: 'client-1',
+		ownerOrgId: 'org-1',
+		personId: 'person-1',
 		name: 'docs',
 	}
 	let currentLive: typeof live | null = { ...live }
@@ -326,6 +341,8 @@ test('checkState fails closed when the live server no longer matches the attempt
 		serverId: live.serverId,
 		serverUrl: live.serverUrl,
 		clientId: live.clientId,
+		ownerOrgId: live.ownerOrgId,
+		personId: live.personId,
 		discovery: discoveryOnIssuer,
 	})
 	await writeMcpOAuthAttemptIdentity(storage, pending!)

@@ -213,10 +213,13 @@ function installMcpOAuthAttemptBinding(
 				typeof provider.discoveryState === 'function'
 					? await provider.discoveryState()
 					: undefined
+			if (!live.ownerOrgId || !live.personId) return
 			const identity = buildMcpOAuthAttemptIdentity({
 				serverId: live.serverId,
 				serverUrl: live.serverUrl,
 				clientId,
+				ownerOrgId: live.ownerOrgId,
+				personId: live.personId,
 				discovery,
 			})
 			if (!identity) return

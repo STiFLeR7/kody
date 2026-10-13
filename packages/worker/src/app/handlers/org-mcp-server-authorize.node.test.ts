@@ -47,6 +47,7 @@ vi.mock('#worker/mcp-client/hub-client.ts', () => ({
 					ownerId: input.userId,
 					serverId: readInput.serverId,
 				}),
+			bindOAuthAttemptActor: async () => ({ ok: true }),
 		}) as Partial<McpClientHubClient>,
 }))
 

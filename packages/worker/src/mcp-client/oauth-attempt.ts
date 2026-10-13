@@ -3,6 +3,7 @@ import {
 	discoveryMatchesAttemptAuthorizationServerOrigin,
 	mcpOAuthAttemptIdentityInvalidMessage,
 	mcpOAuthServerOrigin,
+	oauthAttemptActorMatches,
 	oauthAttemptIdentityMatches,
 	sameMcpOAuthServerOrigin,
 	sameMcpOAuthServerUrl,
@@ -24,6 +25,10 @@ export type McpOAuthAttemptIdentity = {
 	serverUrl: string
 	serverOrigin: string
 	clientId: string
+	/** Hub owner org id when the attempt was minted or rebound at consent. */
+	ownerOrgId: string
+	/** Person who minted or consented; rebound at Continue before the AS redirect. */
+	personId: string
 	/** AS origin from discovery at start; null when discovery had no issuer yet. */
 	authorizationServerOrigin: string | null
 	createdAt: number
@@ -34,7 +39,25 @@ export type McpOAuthLiveServerIdentity = {
 	serverUrl: string
 	/** Pre-registered client id when set; otherwise the SQL / registered client id. */
 	clientId: string | null
+	ownerOrgId: string | null
+	personId: string | null
 	name?: string | null
+}
+
+export type McpOAuthAttemptActor = {
+	ownerOrgId: string
+	personId: string
+}
+
+/** Build the actor stamp from the signed-in person and the hub's owner org. */
+export function mcpOAuthAttemptActorFromIds(input: {
+	ownerOrgId: string | null | undefined
+	personId: string | null | undefined
+}): McpOAuthAttemptActor | null {
+	const ownerOrgId = input.ownerOrgId?.trim() ?? ''
+	const personId = input.personId?.trim() ?? ''
+	if (!ownerOrgId || !personId) return null
+	return { ownerOrgId, personId }
 }
 
 export class McpOAuthAttemptIdentityError extends Error {
@@ -55,12 +78,16 @@ export function parseMcpOAuthAttemptIdentity(
 	const serverUrl = record['serverUrl']
 	const serverOrigin = record['serverOrigin']
 	const clientId = record['clientId']
+	const ownerOrgId = record['ownerOrgId']
+	const personId = record['personId']
 	const createdAt = record['createdAt']
 	const authorizationServerOrigin = record['authorizationServerOrigin']
 	if (typeof serverId !== 'string' || !serverId) return null
 	if (typeof serverUrl !== 'string' || !serverUrl) return null
 	if (typeof serverOrigin !== 'string' || !serverOrigin) return null
 	if (typeof clientId !== 'string' || !clientId) return null
+	if (typeof ownerOrgId !== 'string' || !ownerOrgId) return null
+	if (typeof personId !== 'string' || !personId) return null
 	if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) return null
 	if (
 		authorizationServerOrigin != null &&
@@ -73,6 +100,8 @@ export function parseMcpOAuthAttemptIdentity(
 		serverUrl,
 		serverOrigin,
 		clientId,
+		ownerOrgId,
+		personId,
 		authorizationServerOrigin: authorizationServerOrigin ?? null,
 		createdAt,
 	}
@@ -82,16 +111,28 @@ export function buildMcpOAuthAttemptIdentity(input: {
 	serverId: string
 	serverUrl: string
 	clientId: string
+	ownerOrgId: string
+	personId: string
 	discovery?: unknown
 	createdAt?: number
 }): McpOAuthAttemptIdentity | null {
 	const serverOrigin = mcpOAuthServerOrigin(input.serverUrl)
-	if (!serverOrigin || !input.serverId || !input.clientId) return null
+	if (
+		!serverOrigin ||
+		!input.serverId ||
+		!input.clientId ||
+		!input.ownerOrgId ||
+		!input.personId
+	) {
+		return null
+	}
 	return {
 		serverId: input.serverId,
 		serverUrl: input.serverUrl,
 		serverOrigin,
 		clientId: input.clientId,
+		ownerOrgId: input.ownerOrgId,
+		personId: input.personId,
 		authorizationServerOrigin: authorizationServerOriginFromDiscovery(
 			input.discovery,
 		),
@@ -116,6 +157,16 @@ export function oauthAttemptMatchesLiveServer(input: {
 			pendingClientId: pending.clientId,
 			serverId: live.serverId,
 			clientId: live.clientId,
+		})
+	) {
+		return false
+	}
+	if (
+		!oauthAttemptActorMatches({
+			pendingOwnerOrgId: pending.ownerOrgId,
+			pendingPersonId: pending.personId,
+			ownerOrgId: live.ownerOrgId,
+			personId: live.personId,
 		})
 	) {
 		return false

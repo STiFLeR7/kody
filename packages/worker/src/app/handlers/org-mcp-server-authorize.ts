@@ -20,6 +20,7 @@ import {
 	verifyMcpServerAuthorizeConsentToken,
 } from '#worker/mcp-client/authorize-consent.ts'
 import { createMcpClientHubClient } from '#worker/mcp-client/hub-client.ts'
+import { mcpOAuthAttemptActorFromIds } from '#worker/mcp-client/oauth-attempt.ts'
 import { getMcpServerSettingById } from '#worker/mcp-client/settings-service.ts'
 import { type McpServerPendingAuthorization } from '#worker/mcp-client/types.ts'
 import { ownerIdFromCaller } from '#worker/request-context/owner-id.ts'
@@ -259,6 +260,22 @@ export function createOrgMcpServerAuthorizePostHandler(env: Env) {
 					},
 					403,
 				)
+			}
+			const actor = mcpOAuthAttemptActorFromIds({
+				ownerOrgId: context.user.request.org.id,
+				personId: context.user.mcpUser.userId,
+			})
+			if (actor) {
+				const hub = createMcpClientHubClient({
+					env,
+					userId: context.user.request.org.id,
+				})
+				await hub
+					.bindOAuthAttemptActor({
+						serverId: context.setting.id,
+						actor,
+					})
+					.catch(() => ({ ok: false }))
 			}
 			return respond({ ok: true, authorizationUrl: pending.authorizationUrl })
 		},
