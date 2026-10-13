@@ -1,11 +1,12 @@
 import { type Action } from 'remix/router'
+import { loadAccountCredentialsData } from '#app/account-credentials-data.ts'
 import { requireAuthenticatedPageUser } from '#app/page-auth.ts'
-import { credentialCreateInterimHref } from '#universal/credential-contracts.ts'
+import { renderAppPage } from '#app/ssr-render.tsx'
 import { type routes } from '#universal/routes.ts'
 
 /**
- * The credential creation link agents hand out. Until the one-pager ships it
- * sends the visit, query intact, to the existing page for the requested kind.
+ * The credential creation link agents hand out. The page reads the link's
+ * query itself; the list lets it point at credentials that already fit.
  */
 export function createConnectCredentialHandler(env: Env) {
 	return {
@@ -15,17 +16,15 @@ export function createConnectCredentialHandler(env: Env) {
 			if (user instanceof Response) {
 				return user
 			}
-			const requestUrl = new URL(request.url)
-			const location = credentialCreateInterimHref({
-				search: requestUrl.searchParams,
-				orgSlug: user.request.org.slug ?? user.username,
+			const accountCredentials = await loadAccountCredentialsData({
+				env,
+				user,
 			})
-			return new Response(null, {
-				status: 302,
-				headers: {
-					location: new URL(location, requestUrl).toString(),
-					'cache-control': 'private, no-store',
-				},
+			return renderAppPage({
+				request,
+				env,
+				title: 'Add a credential',
+				loaderData: { accountCredentials },
 			})
 		},
 	} satisfies Action<typeof routes.connectCredential>

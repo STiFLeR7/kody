@@ -371,42 +371,6 @@ export function parseCredentialCreateQuery(
 	}
 }
 
-/**
- * Where `/connect/credential` sends a visit until the one-pager ships: the
- * existing page for the kind, with the same query. No existing form creates
- * `url`, `login`, or `signing`, so those land on the Secrets list instead of
- * a form that would save the wrong kind.
- */
-export function credentialCreateInterimHref(input: {
-	search: URLSearchParams
-	orgSlug: string | null
-}): string {
-	const parsed = parseCredentialCreateQuery(input.search)
-	const query = input.search.toString()
-	const withQuery = (path: string) => (query ? `${path}?${query}` : path)
-	switch (parsed.kind) {
-		case 'oauth':
-			return withQuery('/connect/oauth')
-		case 'mcp':
-			return input.orgSlug
-				? withQuery(`/@${encodeURIComponent(input.orgSlug)}/-/mcp-servers`)
-				: withQuery('/account')
-		case 'url':
-		case 'login':
-		case 'signing':
-			return input.orgSlug
-				? `/@${encodeURIComponent(input.orgSlug)}/-/secrets`
-				: '/account'
-		case 'secret':
-		case null:
-			return withQuery('/connect/secret-set')
-		default: {
-			const exhaustive: never = parsed.kind
-			throw new Error(`Unhandled credential kind: ${String(exhaustive)}`)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Proposal / approval link: /@:username/:kodyId/approve-credentials
 // ---------------------------------------------------------------------------

@@ -37,7 +37,6 @@ import {
 	isCredentialKind,
 	buildCredentialCreateHref,
 	buildCredentialCreateUrl,
-	credentialCreateInterimHref,
 	maxCredentialProposalValues,
 	parseCredentialApprovalQuery,
 	parseCredentialCreateQuery,
@@ -85,34 +84,6 @@ test('creation links lock the kind only when required and round-trip prefill', (
 	expect(
 		buildCredentialCreateUrl('https://kody.codes/mcp', { name: 'x' }),
 	).toBe('https://kody.codes/connect/credential?name=x')
-})
-
-test('the interim creation redirect picks the existing page for the kind', () => {
-	const interim = (query: string) =>
-		credentialCreateInterimHref({
-			search: new URLSearchParams(query),
-			orgSlug: 'acme',
-		})
-	expect(interim('kind=oauth&provider=github')).toBe(
-		'/connect/oauth?kind=oauth&provider=github',
-	)
-	expect(interim('kind=secret&name=x&forPackage=pr-digest')).toBe(
-		'/connect/secret-set?kind=secret&name=x&forPackage=pr-digest',
-	)
-	expect(interim('')).toBe('/connect/secret-set')
-	expect(interim('kind=mcp&name=linear')).toBe(
-		'/@acme/-/mcp-servers?kind=mcp&name=linear',
-	)
-	for (const kind of ['url', 'login', 'signing']) {
-		expect(interim(`kind=${kind}&name=x`)).toBe('/@acme/-/secrets')
-	}
-	const noOrg = (query: string) =>
-		credentialCreateInterimHref({
-			search: new URLSearchParams(query),
-			orgSlug: null,
-		})
-	expect(noOrg('kind=mcp')).toBe('/account?kind=mcp')
-	expect(noOrg('kind=login')).toBe('/account')
 })
 
 test('picks parse names, scoped names, and ids', () => {

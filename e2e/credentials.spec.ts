@@ -77,3 +77,61 @@ test('Credentials lists a key, filters by kind, and opens its detail pane withou
 		expect(response?.status(), section).toBe(200)
 	}
 })
+
+test('the creation link saves a Key from its prefill and offers the other kinds', async ({
+	page,
+	seedE2eUser,
+	login,
+}) => {
+	test.setTimeout(process.env.CI ? 90_000 : 60_000)
+	const runId = Date.now()
+	const user = await seedE2eUser({
+		email: `credential-link-${runId}@example.com`,
+		username: `credential-link-${runId}`,
+		password: 'credential-link-password',
+	})
+	await login({ email: user.email, password: user.password, mode: 'login' })
+	const value = `re-never-shown-${runId}`
+
+	await page.goto(
+		'/connect/credential?kind=secret&kindMode=required&name=DIGEST_KEY&provider=resend&allowedHosts=api.resend.com&forPackage=pr-digest&need=email',
+	)
+	await waitForClientHydration(page)
+	await expect(page.getByRole('heading', { name: 'Add a key' })).toBeVisible()
+	await expect(
+		page.getByText('This link asks for a Key credential.'),
+	).toBeVisible()
+	await expect(page.getByTestId('credential-kind-oauth')).toHaveCount(0)
+	await expect(page.getByLabel('Name')).toHaveValue('DIGEST_KEY')
+	await expect(page.getByLabel(/Allowed hosts/)).toHaveValue('api.resend.com')
+	await page.getByRole('textbox', { name: 'Value' }).fill(value)
+	await page.getByTestId('connect-credential-save').click()
+	await expect(page.getByTestId('connect-credential-saved')).toContainText(
+		'DIGEST_KEY is saved',
+	)
+	await expect(page.getByText(value)).toHaveCount(0)
+
+	await page.getByRole('link', { name: 'View credential' }).click()
+	const pane = page.getByRole('region', { name: 'DIGEST_KEY details' })
+	await expect(pane.getByText('api.resend.com')).toBeVisible()
+	await expect(pane.getByText('resend', { exact: true })).toBeVisible()
+
+	// A hinted kind can change; OAuth hands the prefill to /connect/oauth.
+	await page.goto('/connect/credential?kind=secret&provider=github')
+	await waitForClientHydration(page)
+	await page.getByTestId('credential-kind-oauth').click()
+	await expect(page).toHaveURL(
+		/\/connect\/credential\?kind=oauth&provider=github$/,
+	)
+	await expect(page.getByTestId('connect-credential-continue')).toHaveAttribute(
+		'href',
+		'/connect/oauth?kind=oauth&provider=github',
+	)
+
+	await page.goto('/connect/credential?kind=url&kindMode=required&name=BOT_URL')
+	await waitForClientHydration(page)
+	await expect(page.getByTestId('connect-credential-unavailable')).toBeVisible()
+	await expect(
+		page.getByRole('button', { name: 'Copy prompt for your agent' }),
+	).toBeVisible()
+})

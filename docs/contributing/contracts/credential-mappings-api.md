@@ -518,7 +518,8 @@ Each step is a small PR stacked on the previous one:
 
 1. This contract and the ADR amendment.
 2. `universal/credential-contracts.ts`: types and URL codecs, with tests.
-3. Runtime errors carry `createUrl`; `/connect/credential` interim redirect.
+3. Runtime errors carry `createUrl`; `/connect/credential` interim redirect
+   (replaced by the creation one-pager).
 4. Credentials list API and `credentialList` (MCP servers included).
 5. Mapping storage (additive migration) and resolution in `credential()`.
 6. Package credentials API.
