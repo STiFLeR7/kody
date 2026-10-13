@@ -231,6 +231,33 @@ test('listPreviewCandidateNames reads scripts, namespace owners, paged D1/KV nam
 	])
 })
 
+test('a dead origin with live siblings is still correctly swept, by design', () => {
+	// A CodeRabbit follow-up on this same PR flagged that `kody-branch-foo-api`
+	// being live strips to base `kody-branch-foo`, which the exact-match
+	// liveness check in planBranchPreviewSweep then treats as orphaned if the
+	// bare `kody-branch-foo` script itself is absent -- and that cleanup then
+	// deletes `-api` too. That mechanism is accurate, but the conclusion that
+	// it is a bug is not: `/workers/scripts` is a complete, account-wide
+	// listing (re-fetched fresh immediately before this exact check), so the
+	// only way a live origin's bare name can be absent from it is if the
+	// origin genuinely is not deployed. Siblings-up-origin-down is precisely
+	// the half-torn-down state #3563 was filed to sweep (see the file-level
+	// comment above collectPreviewBranchWorkerNames); treating it as
+	// protected would reintroduce #3563's original bug, where an orphaned
+	// branch with lingering siblings is never swept.
+	const branchWorkerNames = collectPreviewBranchWorkerNames([
+		'kody-branch-foo-api',
+	])
+	expect(branchWorkerNames).toEqual(['kody-branch-foo'])
+	expect(
+		planBranchPreviewSweep({
+			branchWorkerNames,
+			liveNames: new Set(['kody-branch-foo-api']),
+			maxPerRun: 10,
+		}),
+	).toEqual({ sweep: ['kody-branch-foo'], deferred: [], live: [] })
+})
+
 test('a D1 name from one live branch can never mask an unrelated orphaned branch of the same name', () => {
 	// Regression for the review follow-up on #3563. Two distinct branches:
 	// - "foo" is live: bare worker `kody-branch-foo`, own D1 `kody-branch-foo-db`.
