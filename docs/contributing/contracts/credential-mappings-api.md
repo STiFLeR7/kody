@@ -11,10 +11,10 @@ including the 2026-10-12 amendments and the
 MCP servers, and the opt-in `url`, `login`, and `signing` kinds are all
 credentials.
 
-Shapes here are the API contract. Step 2 of the [build order](#build-order) adds
-the TypeScript types and URL codecs as the worker's universal
-`credential-contracts` module, so the client and server import the same
-definitions.
+Shapes here are the API contract. The TypeScript types and URL codecs live in
+[`credential-contracts.ts`](../../../packages/worker/universal/credential-contracts.ts)
+so the client and the server import the same definitions; its test holds sample
+payloads for UI fixtures.
 
 ## Rules every surface keeps
 
