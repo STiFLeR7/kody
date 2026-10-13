@@ -82,8 +82,10 @@ There are four:
 4. **Enablement.** The only persisted credential choice, used for triggers
    (cron, subscription, webhook) that have no live caller.
 
-There are no mapping or assignment tables and no saved bindings. Key
-placeholders, package allowlists, and usage modes stay (see
+There are no mapping or assignment tables and no saved bindings. The
+[credential mappings amendment](#amendment-2026-10-13-credential-mappings)
+replaces this rule and item 4: package default mappings and per-trigger mappings
+are stored. Key placeholders, package allowlists, and usage modes stay (see
 [Key credentials](#key-credentials)).
 
 ### Key credentials

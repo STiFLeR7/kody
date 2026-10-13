@@ -11,6 +11,7 @@ import { expect, test, vi } from 'vitest'
 import { executeGatewayFetch } from '#mcp/fetch-gateway.ts'
 import { credentialClientHintHeaderName } from '#mcp/credential-client-gateway.ts'
 import { saveSecret } from '#mcp/secrets/service.ts'
+import { upsertPlatformOauthApp } from '#worker/integrations/platform-apps.ts'
 import { upsertGrant } from '#worker/orgs/access-writes.ts'
 import { createOrganization } from '#worker/orgs/create-organization.ts'
 import { provisionPersonalOrg } from '#worker/orgs/provision.ts'
@@ -471,7 +472,7 @@ test('unbound and not-found errors always carry a creation link, locking a decla
 		name: 'github',
 		provider: 'github',
 		description: 'Read PRs to summarize them',
-		package: expect.any(String),
+		forPackage: expect.any(String),
 		need: 'github',
 	})
 
@@ -482,6 +483,49 @@ test('unbound and not-found errors always carry a creation link, locking a decla
 		code: 'credential_not_found',
 		createUrl: 'https://example.com/connect/credential?name=missing',
 	})
+})
+
+test('an unbound link selects a built-in OAuth app, and kinds with no form point at secretSet', async () => {
+	const t = await setup()
+	const bea = t.requestAs('bea', 'owner')
+	await upsertPlatformOauthApp({
+		db: t.db,
+		env: t.env,
+		app: {
+			slug: 'github',
+			clientId: 'platform-github-client-id',
+			clientSecret: 'platform-github-client-secret',
+			tokenUrl: 'https://github.com/login/oauth/access_token',
+			authorizeUrl: 'https://github.com/login/oauth/authorize',
+			flow: 'confidential',
+			visibility: 'published',
+		},
+	})
+	const builtIn = await rejection(
+		openCredentialClient(t.contextFor({ request: bea }), { key: 'github' }),
+	)
+	const builtInUrl = new URL((builtIn.body as { createUrl: string }).createUrl)
+	expect(Object.fromEntries(builtInUrl.searchParams)).toEqual({
+		kind: 'oauth',
+		name: 'github',
+		provider: 'github',
+		platform: 'github',
+	})
+
+	const packageId = await t.savePackage({
+		ownerId: t.acmeId,
+		name: '@acme/hooks',
+	})
+	mockNeeds([{ key: 'deploy-hook', kind: 'url', provider: 'vercel' }])
+	const urlNeed = await rejection(
+		openCredentialClient(t.contextFor({ request: bea, packageId }), {
+			key: 'deploy-hook',
+		}),
+	)
+	expect(urlNeed.message).toContain(
+		'To create it, call secretSet with kind "url" and provider "vercel".',
+	)
+	expect(urlNeed.message).toMatch(/Create one at https:\/\/\S+kind=url/)
 })
 
 test('credential.named works in ad hoc code and unshared personal packages only', async () => {

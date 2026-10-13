@@ -18,6 +18,7 @@ import {
 	type CredentialListItemStatus,
 	type CredentialListResponse,
 	type CredentialMappingChange,
+	type CredentialMappingProposalChange,
 	type CredentialMappingLayer,
 	type CredentialMappingSource,
 	type CredentialRef,
@@ -95,11 +96,23 @@ test('the interim creation redirect picks the existing page for the kind', () =>
 	expect(interim('kind=oauth&provider=github')).toBe(
 		'/connect/oauth?kind=oauth&provider=github',
 	)
-	expect(interim('kind=login&name=x')).toBe(
-		'/connect/secret-set?kind=login&name=x',
+	expect(interim('kind=secret&name=x&forPackage=pr-digest')).toBe(
+		'/connect/secret-set?kind=secret&name=x&forPackage=pr-digest',
 	)
 	expect(interim('')).toBe('/connect/secret-set')
-	expect(interim('kind=mcp')).toBe('/@acme/-/mcp-servers')
+	expect(interim('kind=mcp&name=linear')).toBe(
+		'/@acme/-/mcp-servers?kind=mcp&name=linear',
+	)
+	for (const kind of ['url', 'login', 'signing']) {
+		expect(interim(`kind=${kind}&name=x`)).toBe('/@acme/-/secrets')
+	}
+	const noOrg = (query: string) =>
+		credentialCreateInterimHref({
+			search: new URLSearchParams(query),
+			orgSlug: null,
+		})
+	expect(noOrg('kind=mcp')).toBe('/account?kind=mcp')
+	expect(noOrg('kind=login')).toBe('/account')
 })
 
 test('picks parse names, scoped names, and ids', () => {
@@ -114,8 +127,48 @@ test('picks parse names, scoped names, and ids', () => {
 	})
 	expect(parseCredentialPick('id:abc')).toEqual({ id: 'abc' })
 	expect(parseCredentialPick('acme:bot')).toEqual({ name: 'acme:bot' })
+	expect(parseCredentialPick('name:org:bot')).toEqual({ name: 'org:bot' })
 	expect(parseCredentialPick('  ')).toBeNull()
 	expect(parseCredentialPick('org:')).toBeNull()
+	expect(parseCredentialPick('name:')).toBeNull()
+})
+
+test('names that look like prefixes and brackets in names round-trip', () => {
+	const changes = [
+		{
+			target: { type: 'default', layer: 'mine' },
+			needKey: 'google',
+			credentials: [
+				{ name: 'org:bot' },
+				{ name: 'id:abc' },
+				{ name: 'name:x' },
+			],
+		},
+		{
+			target: {
+				type: 'trigger',
+				trigger: { kind: 'cron', name: 'daily]backup [50%]' },
+			},
+			needKey: 'git[hub]',
+			credentials: [{ id: 'cred-1' }],
+		},
+	] satisfies Array<CredentialMappingProposalChange>
+	const href = buildCredentialApprovalHref({
+		username: 'acme',
+		kodyId: 'pr-digest',
+		changes,
+	})
+	const url = new URL(href, 'https://kody.codes')
+	expect(url.searchParams.getAll('mine[google]')).toEqual([
+		'name:org:bot',
+		'name:id:abc',
+		'name:name:x',
+	])
+	expect(parseCredentialApprovalQuery(url.searchParams)).toEqual({
+		changes,
+		reason: null,
+		errors: [],
+	})
 })
 
 test('approval links round-trip defaults, personal defaults, triggers, and none', () => {
@@ -190,6 +243,23 @@ test('approval queries report malformed mapping params and cap the size', () => 
 		},
 	])
 
+	const invalid = parseCredentialApprovalQuery(
+		new URLSearchParams(
+			'default[github]=org:&mine[google]=&mine[google]=work&default[slack]=',
+		),
+	)
+	expect(invalid.errors).toEqual([
+		'"default[github]" has a value that is not a credential pick: "org:".',
+		'"mine[google]" mixes an empty value (none on purpose) with credentials.',
+	])
+	expect(invalid.changes).toEqual([
+		{
+			target: { type: 'default', layer: 'org' },
+			needKey: 'slack',
+			credentials: [],
+		},
+	])
+
 	const tooMany = new URLSearchParams()
 	for (let index = 0; index <= maxCredentialProposalValues; index += 1) {
 		tooMany.append(`default[need-${index}]`, 'x')
@@ -208,7 +278,7 @@ test('vocabularies match the contract', () => {
 		'login',
 		'signing',
 	] satisfies Array<CredentialKind>)
-	expect(fetchCapableCredentialKinds.every(isCredentialKind)).toBe(true)
+	expect(fetchCapableCredentialKinds).toEqual(['secret', 'oauth', 'login'])
 	expect(isCredentialKind('mcp')).toBe(true)
 	expect(isCredentialKind('vault')).toBe(false)
 	expect(credentialScopes).toEqual([
