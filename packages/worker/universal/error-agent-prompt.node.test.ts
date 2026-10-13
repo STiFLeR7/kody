@@ -77,6 +77,14 @@ test('redactErrorAgentPromptText strips bearer, jwt, keys, and query secrets', (
 			'Authorization: Bearer abc+def/ghi=padded-token-value',
 		),
 	).not.toContain('abc def')
+	// Encoded JWT dots (`%2E`): plain matchers stop at `%` and would leave the
+	// payload/signature visible if we kept the raw redaction.
+	const encodedJwt =
+		'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9%2EeyJzdWIiOiIxMjM0NTY3ODkwIn0%2Esignaturepartishere'
+	const redactedEncodedJwt = redactErrorAgentPromptText(encodedJwt)
+	expect(redactedEncodedJwt).toContain('Bearer [REDACTED]')
+	expect(redactedEncodedJwt).not.toContain('signaturepartishere')
+	expect(redactedEncodedJwt).not.toContain('%2E')
 	expect(
 		redactErrorAgentPromptText('password: hunter2-extra-long-value'),
 	).toContain('password: [REDACTED]')

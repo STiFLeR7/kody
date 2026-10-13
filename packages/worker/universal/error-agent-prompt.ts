@@ -117,10 +117,11 @@ export function redactErrorAgentPromptText(text: string) {
 		return original
 	}
 	if (decoded === text) return original
-	const redactedDecoded = redactPlainErrorAgentPromptText(decoded)
-	const originalHits = original.split(REDACTED).length
-	const decodedHits = redactedDecoded.split(REDACTED).length
-	return decodedHits > originalHits ? redactedDecoded : original
+	// Always prefer the decoded redaction when percent-decoding changed the
+	// string. Token matchers stop at `%`, so an encoded JWT/Bearer can look
+	// "already redacted" in the raw copy while the remainder of the secret
+	// stays visible — comparing REDACTED hit counts hid that leak.
+	return redactPlainErrorAgentPromptText(decoded)
 }
 
 function pushIdLine(
