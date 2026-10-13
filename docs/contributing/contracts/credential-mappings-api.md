@@ -355,7 +355,9 @@ Each mapping param is repeatable, one value per credential:
   `daily]backup` is `trigger[cron:daily%5Dbackup][github]` after query decoding.
   The codecs do this; hand-built links only need it for those three characters.
 
-At most 64 mapping params. Example:
+At most 64 mapping params (a param's repeated values count once). Param names
+that decode to the same target and need (`default[github]` and
+`default[git%68ub]`) are one param. Example:
 
 ```
 /@acme/pr-digest/approve-credentials?default[github]=org:acme-bot&trigger[cron:daily][slack]=team-slack&reason=Daily%20digest%20posts%20to%20Slack
