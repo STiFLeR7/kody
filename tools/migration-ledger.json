@@ -475,6 +475,10 @@
 		{
 			"filename": "0127-webhook-hmac-rotation-grace.sql",
 			"sha256": "fee645c4aba4b3a09d1604ee35184d2d09a9dec0a6a5bef42d0a394c489f8fcc"
+		},
+		{
+			"filename": "0128-package-app-custom-hostnames.sql",
+			"sha256": "4789df598f18f9ba9082cad29e680c15c14f61cd298f299a4519e79ecd8599fb"
 		}
 	]
 }
