@@ -69,6 +69,8 @@ import {
 	type PackageWorkflowTools,
 } from '#mcp/runtime-helper-manifest.ts'
 import { newRunCredentialClientBinding } from '#worker/credentials/credential-client-handle.ts'
+import { type RunCredentialCallMap } from '#worker/credentials/credential-call-map.ts'
+import { validateCredentialCallMap } from '#worker/credentials/credential-client.ts'
 import {
 	buildKodyModuleBundle,
 	hydrateKodyRuntimeModules,
@@ -677,6 +679,7 @@ export async function runModuleWithRegistry(
 		 * human-friendly phase messages aligned with `serverTiming` names.
 		 */
 		reportProgress?: McpReportProgress
+		credentialCallMap?: RunCredentialCallMap | null
 	},
 ): Promise<
 	ExecuteResult & {
@@ -1047,6 +1050,7 @@ export async function runBundledModuleWithRegistry(
 		 */
 		executeShape?: ExecuteThinGlueClass | null
 		claimWorkerDay?: ClaimWorkerDay
+		credentialCallMap?: RunCredentialCallMap | null
 	},
 ): Promise<
 	ExecuteResult & {
@@ -1225,6 +1229,17 @@ export async function runBundledModuleWithRegistry(
 		})
 		const closedWorldRetrieverRuntime =
 			options?.closedWorldRetrieverRuntime === true
+		const callMap = options?.credentialCallMap ?? null
+		if (callMap) {
+			const { warnings } = await validateCredentialCallMap({
+				env,
+				request: callerContext.request ?? null,
+				map: callMap.map,
+				packageIds: [...grantedPackageStorageIds],
+				strict: callMap.strict,
+			})
+			if (warnings.length > 0) callMap.onWarnings?.(warnings)
+		}
 		const credentialClientBinding = newRunCredentialClientBinding()
 		const credentialClientTools: CredentialClientToolOptions | undefined =
 			callerContext.user?.userId && !closedWorldRetrieverRuntime
@@ -1237,6 +1252,7 @@ export async function runBundledModuleWithRegistry(
 							grantedPackageStorageIds.has(requested)
 								? requested
 								: (options?.packageContext?.packageId ?? null),
+						callMap: callMap?.map ?? null,
 						waitUntil: options?.waitUntil,
 					}
 				: undefined

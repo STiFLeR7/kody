@@ -35,6 +35,11 @@ import {
 import { getCapabilityRegistryForContext } from '#mcp/capabilities/registry.ts'
 import { getInboundRequestSignal } from '#mcp/inbound-request-signal.ts'
 import { runModuleWithRegistry } from '#mcp/run-kody-registry.ts'
+import {
+	credentialCallMapSchema,
+	normalizeCredentialCallMap,
+	type CredentialCallMapInput,
+} from '#worker/credentials/credential-call-map.ts'
 import { type McpRegistrationAgent } from '#mcp/mcp-registration-agent.ts'
 import { createProgressReporter, type McpToolCallExtra } from '#mcp/progress.ts'
 import {
@@ -268,6 +273,7 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 					.describe(
 						`Optional idempotency key (max ${runRecordMaxIdempotencyKeyLength} chars). Reusing a key returns the retained or in-progress run without re-executing; use its runId with runGet after a transport timeout. Omit for ordinary calls.`,
 					),
+				credentials: credentialCallMapSchema.optional(),
 			},
 			annotations: executeTool.annotations,
 		},
@@ -280,6 +286,7 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 				conversationId,
 				memoryContext,
 				idempotencyKey,
+				credentials,
 			}: {
 				code?: string
 				invoke?: string
@@ -288,6 +295,7 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 				conversationId?: string
 				memoryContext?: z.infer<typeof memoryContextInputField>
 				idempotencyKey?: string
+				credentials?: CredentialCallMapInput
 			},
 			toolExtra?: McpToolCallExtra,
 		) => {
@@ -561,6 +569,17 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 					registry.capabilityHandlers,
 				).length
 				const rawFetchHosts = createRawFetchHostSink()
+				const credentialCallMapWarnings: Array<string> = []
+				const normalizedCallMap = normalizeCredentialCallMap(credentials)
+				const credentialCallMap = normalizedCallMap
+					? {
+							map: normalizedCallMap,
+							strict: resolvedModule.entry === 'invoke',
+							onWarnings: (warnings: Array<string>) => {
+								credentialCallMapWarnings.push(...warnings)
+							},
+						}
+					: null
 				const result = await Sentry.startSpan(
 					{
 						name: 'mcp.tool.execute',
@@ -587,6 +606,7 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 											conversationId: resolvedConversationId,
 											runRecordHandle: claimedRunHandle,
 											claimWorkerDay,
+											credentialCallMap,
 											waitUntil,
 											reportProgress: reportProgress ?? undefined,
 											signal: inboundSignal,
@@ -652,16 +672,19 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 						: {}),
 				}
 				const durationMs = timing.durationMs
-				const rawFetchHostNudges = await resolveRawFetchHostNudges({
-					agent,
-					env,
-					callerContext,
-					conversationId: resolvedConversationId,
-					hostCounts: rawFetchHosts.hostCounts(),
-					usedIntegrationAuthHelpers: codeUsesIntegrationAuthHelpers(
-						resolvedModule.code,
-					),
-				})
+				const rawFetchHostNudges = [
+					...credentialCallMapWarnings,
+					...(await resolveRawFetchHostNudges({
+						agent,
+						env,
+						callerContext,
+						conversationId: resolvedConversationId,
+						hostCounts: rawFetchHosts.hostCounts(),
+						usedIntegrationAuthHelpers: codeUsesIntegrationAuthHelpers(
+							resolvedModule.code,
+						),
+					})),
+				]
 				const runId =
 					typeof result.runId === 'string'
 						? result.runId
