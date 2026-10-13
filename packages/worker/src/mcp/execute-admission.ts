@@ -70,7 +70,7 @@ export class ExecuteLoopDetectedError extends Error {
 /**
  * Repeat key for the loop brake: the connection (credential, acting user,
  * and the caller's conversation id when it sent one) plus the exact code or
- * invoke target and canonical params.
+ * invoke target, canonical params, and the credentials call map.
  */
 export async function executeRepeatKey(input: {
 	credential: Pick<RequestCredential, 'kind' | 'id'> | null
@@ -79,6 +79,7 @@ export async function executeRepeatKey(input: {
 	code: string | undefined
 	invoke: string | undefined
 	params: Record<string, unknown> | undefined
+	credentials?: Record<string, unknown> | undefined
 }): Promise<string> {
 	return await sha256Base64Url(
 		canonicalJsonStringify({
@@ -89,6 +90,7 @@ export async function executeRepeatKey(input: {
 			code: input.code ?? null,
 			invoke: input.invoke ?? null,
 			params: input.params ?? null,
+			...(input.credentials ? { credentials: input.credentials } : {}),
 		}),
 	)
 }

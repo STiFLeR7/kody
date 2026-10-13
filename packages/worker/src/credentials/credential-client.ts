@@ -505,7 +505,11 @@ export async function validateCredentialCallMap(input: {
 			),
 		])
 		const needs = new Map<string, CredentialNeed>()
-		for (const need of needLists.flat()) needs.set(need.key, need)
+		// The entry package comes first: its closure pins its dependencies'
+		// needs, so a dependency's later publish never replaces them.
+		for (const need of needLists.flat()) {
+			if (!needs.has(need.key)) needs.set(need.key, need)
+		}
 		const warnings: Array<string> = []
 		for (const [key, picks] of input.map) {
 			const need = needs.get(key) ?? null

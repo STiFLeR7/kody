@@ -769,3 +769,33 @@ test('a call map is validated before code runs: unknown keys fail an invoke and 
 		),
 	).resolves.toMatchObject({ body: { code: 'credential_denied' } })
 })
+
+test('call map validation keeps the entry package pinned needs over a dependency later publish', async () => {
+	const t = await setup()
+	await t.storeKey({ name: 'resend-prod' })
+	const request = t.requestAs('bea', 'owner')
+	const entryId = await t.savePackage({
+		ownerId: t.acmeId,
+		name: '@acme/entry',
+	})
+	const depId = await t.savePackage({ ownerId: t.acmeId, name: '@acme/mailer' })
+	const need = (provider: string): CredentialNeed => ({
+		key: 'MAIL',
+		kind: 'secret',
+		provider,
+		description: '',
+		multiple: false,
+	})
+	vi.spyOn(needsClosure, 'loadPublishedCredentialNeeds')
+		.mockResolvedValueOnce([need('resend')])
+		.mockResolvedValueOnce([need('postmark')])
+	await expect(
+		validateCredentialCallMap({
+			env: t.env,
+			request,
+			map: normalizeCredentialCallMap({ MAIL: 'resend-prod' })!,
+			packageIds: [entryId, depId],
+			strict: true,
+		}),
+	).resolves.toEqual({ warnings: [] })
+})

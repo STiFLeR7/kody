@@ -69,7 +69,10 @@ import {
 	type PackageWorkflowTools,
 } from '#mcp/runtime-helper-manifest.ts'
 import { newRunCredentialClientBinding } from '#worker/credentials/credential-client-handle.ts'
-import { type RunCredentialCallMap } from '#worker/credentials/credential-call-map.ts'
+import {
+	type CredentialCallMap,
+	type RunCredentialCallMap,
+} from '#worker/credentials/credential-call-map.ts'
 import { validateCredentialCallMap } from '#worker/credentials/credential-client.ts'
 import {
 	buildKodyModuleBundle,
@@ -880,6 +883,8 @@ export function createComputedPackageImportTools(input: {
 	 * when a restricted run supplies these tools explicitly.
 	 */
 	closedWorldRetrieverRuntime?: boolean
+	/** The caller's credential picks, which nested library loads keep. */
+	credentialCallMap?: CredentialCallMap | null
 }): ComputedPackageImportTools {
 	const computedImportDepth = input.computedImportDepth ?? 0
 	return {
@@ -953,6 +958,9 @@ export function createComputedPackageImportTools(input: {
 					computedImportDepth: computedImportDepth + 1,
 					computedPackageImportTools: nestedTools,
 					closedWorldRetrieverRuntime: input.closedWorldRetrieverRuntime,
+					credentialCallMap: input.credentialCallMap
+						? { map: input.credentialCallMap, strict: false }
+						: null,
 					// Library load is not enter-as-package: do not attribute a
 					// package_export usage event to the caller's package id.
 					skipPackageExportUsage: true,
@@ -1235,7 +1243,14 @@ export async function runBundledModuleWithRegistry(
 				env,
 				request: callerContext.request ?? null,
 				map: callMap.map,
-				packageIds: [...grantedPackageStorageIds],
+				packageIds: [
+					...new Set([
+						...(options?.packageContext?.packageId
+							? [options.packageContext.packageId]
+							: []),
+						...grantedPackageStorageIds,
+					]),
+				],
 				strict: callMap.strict,
 			})
 			if (warnings.length > 0) callMap.onWarnings?.(warnings)
@@ -1335,6 +1350,7 @@ export async function runBundledModuleWithRegistry(
 						computedImportDepth: options?.computedImportDepth ?? 0,
 						conversationId: options?.conversationId ?? null,
 						closedWorldRetrieverRuntime,
+						credentialCallMap: callMap?.map ?? null,
 					})
 				: undefined)
 		// Register the package_storage_* tools whenever the run has a user, even

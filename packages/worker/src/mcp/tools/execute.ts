@@ -519,6 +519,7 @@ export async function registerExecuteTool(agent: McpRegistrationAgent) {
 								code,
 								invoke,
 								params,
+								credentials,
 							}),
 						})
 					: null
