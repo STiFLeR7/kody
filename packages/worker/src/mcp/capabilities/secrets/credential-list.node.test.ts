@@ -84,6 +84,25 @@ test('credentialList returns MCP servers beside Keys and applies the filters', a
 	])
 })
 
+test('credentialList reads locked=true from an Open API query string', async () => {
+	listed.items = [
+		item({ id: 'c-free', kind: 'secret', name: 'free' }),
+		item({
+			id: 'c-locked',
+			kind: 'secret',
+			name: 'locked',
+			lockedToPackageIds: ['pkg-1'],
+		}),
+	]
+	const lockedIds = async (locked: true | string) =>
+		(
+			await credentialListCapability.handler({ locked }, caller(null))
+		).credentials.map((credential) => credential.id)
+	expect(await lockedIds('true')).toEqual(['c-locked'])
+	expect(await lockedIds(true)).toEqual(['c-locked'])
+	expect(await lockedIds('pkg-2')).toEqual([])
+})
+
 test('package code cannot list credentials', async () => {
 	await expect(
 		credentialListCapability.handler({}, caller('pkg-1')),

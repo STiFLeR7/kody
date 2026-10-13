@@ -1434,16 +1434,22 @@ on write unless a migration backfills existing rows.
   `package_invocation_tokens` table.
 - `webhook_endpoints` (`0001-squashed-init.sql`,
   `0057-webhook-url-secret-encrypted.sql`,
-  `0072-webhook-hmac-secret-encrypted.sql`) stores per-user minted URL state for
+  `0062-webhook-url-rotation-grace.sql`,
+  `0072-webhook-hmac-secret-encrypted.sql`,
+  `0127-webhook-hmac-rotation-grace.sql`) stores per-user minted URL state for
   `package.json#kody.webhooks`, keyed by `(user_id, package_id, webhook_name)`.
   URL secrets are SHA-256 hashed for ingress and AES-GCM encrypted
   (`url_secret_encrypted`) for server-side apply. Package-owned HMAC signing
   material lives on the same row (`hmac_secret_encrypted`) when verification
   omits `secretName`; provider-issued secrets use the secrets primitive via
-  optional `verification.secretName`. MCP capabilities never return the
-  plaintext URL or HMAC. Delivery history is recorded as `webhook` surface run
-  records (see [Run records](./run-records.md) and
-  [Inbound webhooks](./webhooks.md)), not as D1 rows.
+  optional `verification.secretName`. Last-seen signing identity
+  (`hmac_secret_name`) and a verification snapshot
+  (`hmac_verification_secret_encrypted`) track declared-secret rotation;
+  `previous_hmac_secret_*` holds the outgoing key for a 24h grace window (same
+  duration as URL rotate overlap). MCP capabilities never return the plaintext
+  URL or HMAC. Delivery history is recorded as `webhook` surface run records
+  (see [Run records](./run-records.md) and [Inbound webhooks](./webhooks.md)),
+  not as D1 rows.
 - `system_email_daily_counters` (`0001-squashed-init.sql`) stores fixed
   per-local daily receive counters for operator-owned system inboxes. These
   counters are not user entitlements and are pruned by the system-email
@@ -1531,7 +1537,7 @@ on write unless a migration backfills existing rows.
   each personal credential is granted to. `credential_id` is a credential in the
   owner's personal org, `user_id` is the owner's person id, and the row is
   hard-deleted when the owner leaves that org.
-- `credential_mappings` (`0125-credential-mappings.sql`,
+- `credential_mappings` (`0130-credential-mappings.sql`,
   `packages/worker/src/credentials/credential-mappings.ts`) stores which
   credentials one package need resolves to: the org-layer default (`target`
   `org`), one person's own default (`mine`, `person_user_id` set), or one

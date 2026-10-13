@@ -99,7 +99,11 @@ export const credentialListCapability = defineDomainCapability(
 				env: ctx.env,
 				request,
 			})
-			return { credentials: filterCredentialList(credentials, args) }
+			// Open API query strings carry `locked=true` as the string "true".
+			const locked = args.locked === 'true' ? true : args.locked
+			return {
+				credentials: filterCredentialList(credentials, { ...args, locked }),
+			}
 		},
 	},
 )
