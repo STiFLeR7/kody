@@ -75,6 +75,7 @@ import {
 	sanitizePersistedMcpServerOptions,
 	sanitizeStoredMcpSessions,
 } from './restore.ts'
+import { mcpOAuthAttemptStorageKey } from './oauth-attempt.ts'
 import { extractMcpServerIdFromOAuthState } from './oauth-state.ts'
 import { withStaticTransportHeaders } from './transport-headers.ts'
 import { clearLiveMcpTransportSession } from './transport-session.ts'
@@ -174,6 +175,28 @@ class McpClientHubBase extends DurableObject<Env> {
 		return createMcpClientOAuthProvider(this.ctx.storage, callbackUrl, {
 			resolvePreRegisteredClient: (serverId) =>
 				this.resolvePreRegisteredOAuthClient(serverId),
+			resolveLiveServerIdentity: (serverId) =>
+				this.resolveLiveOAuthServerIdentity(serverId),
+		})
+	}
+
+	/**
+	 * Live hub row + expected OAuth client for an in-flight attempt fence.
+	 * Pre-registered clients win over SQL `client_id` (DCR/CIMD), matching how
+	 * the provider presents credentials to the authorization server.
+	 */
+	private resolveLiveOAuthServerIdentity(serverId: string) {
+		const row = this.manager
+			.listServers()
+			.find((server) => server.id === serverId)
+		if (!row) return Promise.resolve(null)
+		const preRegisteredClientId =
+			this.preRegisteredClientIds.get(serverId) ?? null
+		return Promise.resolve({
+			serverId: row.id,
+			serverUrl: row.server_url,
+			clientId: preRegisteredClientId ?? row.client_id,
+			name: row.name,
 		})
 	}
 
@@ -476,6 +499,7 @@ class McpClientHubBase extends DurableObject<Env> {
 			mcpOAuthTokenRecoveryStorageKey(input.serverId),
 			mcpOAuthRefreshTokenStorageKey(input.serverId),
 			mcpPreRegisteredOAuthClientStorageKey(input.serverId),
+			mcpOAuthAttemptStorageKey(input.serverId),
 		])
 	}
 
@@ -964,6 +988,8 @@ class McpClientHubBase extends DurableObject<Env> {
 		if (input.clearClientRegistration) {
 			keys.push(mcpOAuthRefreshTokenStorageKey(input.serverId))
 		}
+		// A reconnect or client reset retires any in-flight attempt identity.
+		keys.push(mcpOAuthAttemptStorageKey(input.serverId))
 		if (keys.length > 0) {
 			await this.ctx.storage.delete(keys)
 		}

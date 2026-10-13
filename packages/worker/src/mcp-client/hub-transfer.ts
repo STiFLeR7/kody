@@ -3,6 +3,7 @@ import { mcpClientHubDurableObjectName } from '#worker/user-scoped-durable-objec
 import { mcpClientName } from './client-id-metadata.ts'
 import { mcpConnectionEpisodeStorageKey } from './connection-episodes.ts'
 import { mcpLegacyHandshakeStorageKey } from './legacy-handshake.ts'
+import { mcpOAuthAttemptStorageKey } from './oauth-attempt.ts'
 import {
 	mcpOAuthRefreshTokenStorageKey,
 	mcpOAuthTokenRecoveryStorageKey,
@@ -96,5 +97,6 @@ export function mcpServerSidecarStorageKeys(serverId: string) {
 		mcpOAuthTokenRecoveryStorageKey(serverId),
 		mcpOAuthRefreshTokenStorageKey(serverId),
 		mcpPreRegisteredOAuthClientStorageKey(serverId),
+		mcpOAuthAttemptStorageKey(serverId),
 	]
 }

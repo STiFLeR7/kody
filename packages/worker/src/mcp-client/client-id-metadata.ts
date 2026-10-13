@@ -1,5 +1,19 @@
 import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider'
 import {
+	buildMcpOAuthAttemptIdentity,
+	clearMcpOAuthAttemptIdentity,
+	mcpOAuthAttemptCheckFailure,
+	McpOAuthAttemptIdentityError,
+	oauthAttemptMatchesLiveServer,
+	readMcpOAuthAttemptIdentity,
+	writeMcpOAuthAttemptIdentity,
+	type McpOAuthLiveServerIdentity,
+} from './oauth-attempt.ts'
+import {
+	assertEndpointsOnIssuerOrigin,
+	mcpOAuthAttemptIdentityInvalidMessage,
+} from './oauth-identity.ts'
+import {
 	clientIdFromMcpOAuthTokenStorageKey,
 	mcpOAuthRefreshTokenStorageKey,
 	mcpOAuthServerStoragePrefix,
@@ -107,6 +121,10 @@ type McpOAuthSaveTokens = Parameters<
 	DurableObjectOAuthClientProvider['saveTokens']
 >[0]
 
+export type ResolveMcpOAuthLiveServerIdentity = (
+	serverId: string,
+) => Promise<McpOAuthLiveServerIdentity | null>
+
 /**
  * Agents SDK storage/PKCE provider plus the MCP SDK `clientMetadataUrl`
  * hook. HTTPS callbacks present CIMD; http (local dev) omits it so auth
@@ -119,7 +137,9 @@ type McpOAuthSaveTokens = Parameters<
  * sidecar so a rejected grant cannot be replayed, and skips a `tokens`
  * wipe when a save completed after the invalidate was requested. With
  * `resolvePreRegisteredClient`, a server's admin-configured OAuth client is
- * presented ahead of CIMD and DCR.
+ * presented ahead of CIMD and DCR. With `resolveLiveServerIdentity`, each
+ * authorization attempt is bound to the live server row + client, re-checked
+ * at callback and again immediately before tokens are persisted.
  */
 export function createMcpClientOAuthProvider(
 	storage: DurableObjectStorage,
@@ -128,6 +148,7 @@ export function createMcpClientOAuthProvider(
 		resolvePreRegisteredClient?: (
 			serverId: string,
 		) => Promise<McpPreRegisteredOAuthClientInformation | null>
+		resolveLiveServerIdentity?: ResolveMcpOAuthLiveServerIdentity
 	},
 ) {
 	const provider = new DurableObjectOAuthClientProvider(
@@ -135,7 +156,14 @@ export function createMcpClientOAuthProvider(
 		mcpClientName,
 		callbackUrl,
 	) as McpClientOAuthProvider
-	installMcpOAuthTokenPreservation(provider)
+	// Attempt binding wraps discovery / checkState / redirect first so token
+	// preservation re-saves discovery through the same issuer-origin fence.
+	installMcpOAuthAttemptBinding(provider, {
+		resolveLiveServerIdentity: options?.resolveLiveServerIdentity,
+	})
+	installMcpOAuthTokenPreservation(provider, {
+		resolveLiveServerIdentity: options?.resolveLiveServerIdentity,
+	})
 	if (options?.resolvePreRegisteredClient) {
 		installMcpPreRegisteredOAuthClient(
 			provider,
@@ -149,8 +177,86 @@ export function createMcpClientOAuthProvider(
 	return provider
 }
 
+/**
+ * Bind an in-flight authorization to the server row and client that minted
+ * it. Discovery saves refuse cross-origin AS endpoints. Callback `checkState`
+ * and grant `saveTokens` re-load the live row and refuse on mismatch. Refresh
+ * saves (no pending attempt) are unchanged so existing grants keep working.
+ */
+function installMcpOAuthAttemptBinding(
+	provider: DurableObjectOAuthClientProvider,
+	options: {
+		resolveLiveServerIdentity?: ResolveMcpOAuthLiveServerIdentity
+	},
+) {
+	const resolveLive = options.resolveLiveServerIdentity
+	if (typeof provider.saveDiscoveryState === 'function') {
+		const saveDiscovery = provider.saveDiscoveryState.bind(provider)
+		provider.saveDiscoveryState = async (state) => {
+			assertEndpointsOnIssuerOrigin(state)
+			await saveDiscovery(state)
+		}
+	}
+	if (!resolveLive) return
+	if (typeof provider.redirectToAuthorization === 'function') {
+		const redirect = provider.redirectToAuthorization.bind(provider)
+		provider.redirectToAuthorization = async (authUrl) => {
+			await redirect(authUrl)
+			const serverId = readProviderString(provider, 'serverId')
+			if (!serverId) return
+			const live = await resolveLive(serverId)
+			const clientId =
+				authUrl.searchParams.get('client_id') ||
+				readProviderString(provider, 'clientId')
+			if (!live || !clientId) return
+			const discovery =
+				typeof provider.discoveryState === 'function'
+					? await provider.discoveryState()
+					: undefined
+			const identity = buildMcpOAuthAttemptIdentity({
+				serverId: live.serverId,
+				serverUrl: live.serverUrl,
+				clientId,
+				discovery,
+			})
+			if (!identity) return
+			await writeMcpOAuthAttemptIdentity(provider.storage, identity)
+		}
+	}
+	if (typeof provider.checkState === 'function') {
+		const checkState = provider.checkState.bind(provider)
+		provider.checkState = async (state) => {
+			const result = await checkState(state)
+			if (!result.valid || !result.serverId) return result
+			const pending = await readMcpOAuthAttemptIdentity(
+				provider.storage,
+				result.serverId,
+			)
+			const live = await resolveLive(result.serverId)
+			const discovery =
+				typeof provider.discoveryState === 'function'
+					? await provider.discoveryState()
+					: undefined
+			if (
+				!oauthAttemptMatchesLiveServer({
+					pending,
+					live,
+					discovery,
+				})
+			) {
+				await clearMcpOAuthAttemptIdentity(provider.storage, result.serverId)
+				return mcpOAuthAttemptCheckFailure({ serverName: live?.name })
+			}
+			return result
+		}
+	}
+}
+
 function installMcpOAuthTokenPreservation(
 	provider: DurableObjectOAuthClientProvider,
+	options?: {
+		resolveLiveServerIdentity?: ResolveMcpOAuthLiveServerIdentity
+	},
 ) {
 	if (
 		typeof provider.saveTokens !== 'function' ||
@@ -168,6 +274,7 @@ function installMcpOAuthTokenPreservation(
 		typeof provider.invalidateCredentials === 'function'
 			? provider.invalidateCredentials.bind(provider)
 			: null
+	const resolveLive = options?.resolveLiveServerIdentity
 	let saveQueue = Promise.resolve()
 	let tokenWriteGeneration = 0
 	provider.tokens = async (context) => {
@@ -191,6 +298,7 @@ function installMcpOAuthTokenPreservation(
 				readTokens,
 				readDiscovery,
 				writeDiscovery,
+				resolveLiveServerIdentity: resolveLive,
 			})
 			tokenWriteGeneration += 1
 			return result
@@ -222,6 +330,9 @@ function installMcpOAuthTokenPreservation(
 				const serverId = readProviderString(provider, 'serverId')
 				if (!serverId) return
 				await deleteStoredMcpOAuthTokenBlobs(provider, serverId)
+				if (scope === 'all' || scope === 'client') {
+					await clearMcpOAuthAttemptIdentity(provider.storage, serverId)
+				}
 			})
 			saveQueue = run.then(
 				() => {},
@@ -240,15 +351,44 @@ async function savePreservedMcpOAuthTokens(input: {
 	readTokens: DurableObjectOAuthClientProvider['tokens']
 	readDiscovery: DurableObjectOAuthClientProvider['discoveryState']
 	writeDiscovery: DurableObjectOAuthClientProvider['saveDiscoveryState']
+	resolveLiveServerIdentity?: ResolveMcpOAuthLiveServerIdentity
 }) {
 	const stored = await collectStoredMcpOAuthTokenSources(input.provider)
 	if (!readProviderString(input.provider, 'clientId') && stored.clientId) {
 		input.provider.clientId = stored.clientId
 	}
+	const serverId = readProviderString(input.provider, 'serverId')
+	const pending = serverId
+		? await readMcpOAuthAttemptIdentity(input.provider.storage, serverId)
+		: null
 	const [existing, discovery] = await Promise.all([
 		input.readTokens(input.context).catch(() => undefined),
 		input.readDiscovery(),
 	])
+	if (pending) {
+		// Authorization-code completion: re-check identity immediately before
+		// the grant write (kody-celld #57 / #65). Refresh has no pending row.
+		if (!serverId || !input.resolveLiveServerIdentity) {
+			await clearMcpOAuthAttemptIdentity(
+				input.provider.storage,
+				pending.serverId,
+			)
+			throw new McpOAuthAttemptIdentityError()
+		}
+		const live = await input.resolveLiveServerIdentity(serverId)
+		if (
+			!oauthAttemptMatchesLiveServer({
+				pending,
+				live,
+				discovery,
+			})
+		) {
+			await clearMcpOAuthAttemptIdentity(input.provider.storage, serverId)
+			throw new McpOAuthAttemptIdentityError(
+				mcpOAuthAttemptIdentityInvalidMessage(live?.name),
+			)
+		}
+	}
 	const merged = withPreservedMcpOAuthRefreshToken({
 		incoming: input.incoming,
 		sources: [existing, ...stored.sources],
@@ -259,7 +399,6 @@ async function savePreservedMcpOAuthTokens(input: {
 			: input.incoming,
 		input.context,
 	)
-	const serverId = readProviderString(input.provider, 'serverId')
 	const refreshToken = parseStoredMcpOAuthRefreshToken(merged)
 	if (serverId && refreshToken) {
 		await input.provider.storage.put(mcpOAuthRefreshTokenStorageKey(serverId), {
@@ -268,6 +407,9 @@ async function savePreservedMcpOAuthTokens(input: {
 	}
 	if (discovery !== undefined) {
 		await input.writeDiscovery(discovery)
+	}
+	if (pending && serverId) {
+		await clearMcpOAuthAttemptIdentity(input.provider.storage, serverId)
 	}
 }
 

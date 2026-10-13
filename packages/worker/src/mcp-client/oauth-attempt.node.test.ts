@@ -1,0 +1,137 @@
+import { expect, test } from 'vitest'
+import {
+	buildMcpOAuthAttemptIdentity,
+	mcpOAuthAttemptStorageKey,
+	oauthAttemptMatchesLiveServer,
+	parseMcpOAuthAttemptIdentity,
+	writeMcpOAuthAttemptIdentity,
+	readMcpOAuthAttemptIdentity,
+	clearMcpOAuthAttemptIdentity,
+} from './oauth-attempt.ts'
+
+const serverUrl = 'https://mcp.example/mcp'
+
+test('oauthAttemptMatchesLiveServer fences server id, url/origin, client, and AS origin', () => {
+	const pending = buildMcpOAuthAttemptIdentity({
+		serverId: 'srv-1',
+		serverUrl,
+		clientId: 'client-1',
+		discovery: {
+			authorizationServerMetadata: {
+				issuer: 'https://auth.example',
+				authorization_endpoint: 'https://auth.example/authorize',
+				token_endpoint: 'https://auth.example/token',
+			},
+		},
+	})
+	expect(pending).not.toBeNull()
+	const live = {
+		serverId: 'srv-1',
+		serverUrl,
+		clientId: 'client-1',
+		name: 'docs',
+	}
+	const discovery = {
+		authorizationServerMetadata: {
+			issuer: 'https://auth.example',
+			authorization_endpoint: 'https://auth.example/authorize',
+			token_endpoint: 'https://auth.example/token',
+		},
+	}
+	expect(oauthAttemptMatchesLiveServer({ pending, live, discovery })).toBe(true)
+
+	// Remove and re-add under the same name/URL → new stable id.
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending,
+			live: { ...live, serverId: 'srv-2' },
+			discovery,
+		}),
+	).toBe(false)
+
+	// Client reset / replace mid-flow.
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending,
+			live: { ...live, clientId: 'other-client' },
+			discovery,
+		}),
+	).toBe(false)
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending,
+			live: { ...live, clientId: null },
+			discovery,
+		}),
+	).toBe(false)
+
+	// URL / origin change.
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending,
+			live: { ...live, serverUrl: 'https://other.example/mcp' },
+			discovery,
+		}),
+	).toBe(false)
+
+	// Token endpoint moved off the AS origin discovered at start.
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending,
+			live,
+			discovery: {
+				authorizationServerMetadata: {
+					issuer: 'https://auth.example',
+					token_endpoint: 'https://evil.example/token',
+				},
+			},
+		}),
+	).toBe(false)
+
+	// Legacy pending without ids fails closed.
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending: null,
+			live,
+			discovery,
+		}),
+	).toBe(false)
+	expect(
+		oauthAttemptMatchesLiveServer({
+			pending,
+			live: null,
+			discovery,
+		}),
+	).toBe(false)
+})
+
+test('attempt identity storage round-trips and rejects malformed rows', async () => {
+	const values = new Map<string, unknown>()
+	const storage = {
+		get: async (key: string) => values.get(key),
+		put: async (key: string, value: unknown) => {
+			values.set(key, value)
+		},
+		delete: async (key: string) => {
+			values.delete(key)
+		},
+	}
+	const identity = buildMcpOAuthAttemptIdentity({
+		serverId: 'srv-1',
+		serverUrl,
+		clientId: 'client-1',
+	})
+	expect(identity).not.toBeNull()
+	await writeMcpOAuthAttemptIdentity(storage, identity!)
+	expect(values.get(mcpOAuthAttemptStorageKey('srv-1'))).toEqual(identity)
+	expect(await readMcpOAuthAttemptIdentity(storage, 'srv-1')).toEqual(identity)
+	await clearMcpOAuthAttemptIdentity(storage, 'srv-1')
+	expect(await readMcpOAuthAttemptIdentity(storage, 'srv-1')).toBeNull()
+	expect(parseMcpOAuthAttemptIdentity({ serverId: 'srv-1' })).toBeNull()
+	expect(
+		parseMcpOAuthAttemptIdentity({
+			...identity,
+			clientId: '',
+		}),
+	).toBeNull()
+})
