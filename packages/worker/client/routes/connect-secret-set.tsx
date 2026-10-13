@@ -502,14 +502,16 @@ export function ConnectSecretSetRoute(handle: Handle) {
 						>
 							{message}
 						</p>
-						<ErrorAgentPromptButton
-							prompt={buildHumanApprovalErrorAgentPrompt({
-								activity:
-									'Setting a secret value from a /connect/secret-set setup link.',
-								errorMessage: message,
-								ids: { path: '/connect/secret-set' },
-							})}
-						/>
+						{loadError || setupError ? null : (
+							<ErrorAgentPromptButton
+								prompt={buildHumanApprovalErrorAgentPrompt({
+									activity:
+										'Setting a secret value from a /connect/secret-set setup link.',
+									errorMessage: message,
+									ids: { path: '/connect/secret-set' },
+								})}
+							/>
+						)}
 					</>
 				) : null}
 

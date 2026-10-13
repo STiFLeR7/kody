@@ -464,17 +464,19 @@ export function renderPackageSecretApprovalPage(props: {
 			{message ? (
 				<>
 					<p mix={css({ margin: 0, color: colors.danger })}>{message}</p>
-					<ErrorAgentPromptButton
-						prompt={buildHumanApprovalErrorAgentPrompt({
-							activity:
-								'Allowing a package to use saved secrets from an approval link.',
-							errorMessage: message,
-							ids: {
-								packageKodyId: packageLabel,
-								path: '/account/secrets/approve',
-							},
-						})}
-					/>
+					{approvalError ? null : (
+						<ErrorAgentPromptButton
+							prompt={buildHumanApprovalErrorAgentPrompt({
+								activity:
+									'Allowing a package to use saved secrets from an approval link.',
+								errorMessage: message,
+								ids: {
+									packageKodyId: packageLabel,
+									path: '/account/secrets/approve',
+								},
+							})}
+						/>
+					)}
 				</>
 			) : null}
 

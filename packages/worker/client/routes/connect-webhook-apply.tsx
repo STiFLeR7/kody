@@ -159,6 +159,13 @@ export function ConnectWebhookApplyRoute(handle: Handle) {
 		const href = currentHref()
 		applyLoaderData(href)
 		const payload = data
+		const failedPayloadOwnsPrompt = payload != null && !payload.ok
+		const approvedSuccessMessage =
+			payload?.ok === true &&
+			message != null &&
+			message.includes('Destination approved')
+		const showMessagePrompt =
+			message != null && !failedPayloadOwnsPrompt && !approvedSuccessMessage
 
 		return (
 			<section mix={css(pageCss)} data-testid="connect-webhook-apply">
@@ -181,24 +188,22 @@ export function ConnectWebhookApplyRoute(handle: Handle) {
 						>
 							{message}
 						</p>
-						{payload?.ok && message.includes('Destination approved') ? null : (
-							<>
-								<ErrorAgentPromptButton
-									prompt={buildHumanApprovalErrorAgentPrompt({
-										activity:
-											'Approving an outbound webhook destination in the browser.',
-										errorMessage: message,
-										ids: {
-											packageName:
-												payload && payload.ok ? payload.packageName : null,
-											packageKodyId:
-												payload && payload.ok ? payload.packageKodyId : null,
-											path: '/connect/webhook-apply',
-										},
-									})}
-								/>
-							</>
-						)}
+						{showMessagePrompt ? (
+							<ErrorAgentPromptButton
+								prompt={buildHumanApprovalErrorAgentPrompt({
+									activity:
+										'Approving an outbound webhook destination in the browser.',
+									errorMessage: message,
+									ids: {
+										packageName:
+											payload && payload.ok ? payload.packageName : null,
+										packageKodyId:
+											payload && payload.ok ? payload.packageKodyId : null,
+										path: '/connect/webhook-apply',
+									},
+								})}
+							/>
+						) : null}
 					</>
 				) : null}
 

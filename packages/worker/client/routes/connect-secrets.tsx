@@ -209,14 +209,16 @@ export function ConnectSecretsRoute(handle: Handle) {
 				{message ? (
 					<>
 						<p mix={css({ margin: 0, color: colors.danger })}>{message}</p>
-						<ErrorAgentPromptButton
-							prompt={buildHumanApprovalErrorAgentPrompt({
-								activity:
-									'Allowing secret hosts from a /connect/secrets approval link.',
-								errorMessage: message,
-								ids: { path: '/connect/secrets' },
-							})}
-						/>
+						{data?.approvalError ? null : (
+							<ErrorAgentPromptButton
+								prompt={buildHumanApprovalErrorAgentPrompt({
+									activity:
+										'Allowing secret hosts from a /connect/secrets approval link.',
+									errorMessage: message,
+									ids: { path: '/connect/secrets' },
+								})}
+							/>
+						)}
 					</>
 				) : null}
 
