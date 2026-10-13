@@ -80,7 +80,8 @@ async function loadUsernames(db: D1Database, ids: ReadonlyArray<string>) {
 	const result = await db
 		.prepare(
 			`SELECT stable_user_id, username FROM users
-			WHERE stable_user_id IN (${unique.map(() => '?').join(', ')})`,
+			WHERE stable_user_id IN (${unique.map(() => '?').join(', ')})
+				AND deleted_at IS NULL`,
 		)
 		.bind(...unique)
 		.all<{ stable_user_id: string; username: string }>()
