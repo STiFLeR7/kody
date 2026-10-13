@@ -230,13 +230,13 @@ await resend.fetch('/emails', { method: 'POST', body: JSON.stringify(email) })
 - The caller picks among several matches with a `credentials` map on `execute`
   (for `code` or `invoke`):
   `{ github: 'work', google: ['work', 'personal'], x: { name: 'work', scope: 'org' } }`.
-  A pick's kind must match the need, and its provider must match when both have
-  one. `credentials(key)` returns every pick for the key (`[]` picks none on
-  purpose); without a map entry it returns the one match, never "all of them".
-  The map is checked before code runs: a key the invoked package does not
-  declare fails with `credential_need_unknown`, and in ad hoc code it is a
-  warning. A pick with no provider opens with a `hint` to set one. A pick grants
-  nothing; it chooses only among credentials you can Use.
+  A pick's kind must match when the need declares one, and its provider must
+  match when both have one. `credentials(key)` returns every pick for the key
+  (`[]` picks none on purpose); without a map entry it returns the one match,
+  never "all of them". The map is checked before code runs: a key the invoked
+  package does not declare fails with `credential_need_unknown`, and in ad hoc
+  code it is a warning. A pick with no provider opens with a `hint` to set one.
+  A pick grants nothing; it chooses only among credentials you can Use.
 - A client works only in the run that opened it. Under `kody execute --local`, a
   saved package that imports `credential` works the same; ad hoc local code
   needs a CLI release that adds `credential` to its `kody:runtime`.
