@@ -8,10 +8,13 @@
  * org never use someone else's personal credential: no grant, role, or
  * package stamp reaches it.
  *
- * Backend only for now: placeholders keep resolving org credentials, and no
- * capability grants or lists these yet.
+ * Placeholders keep resolving org credentials only. Scoped `credential()`
+ * clients resolve granted personal credentials, and the owner manages grants
+ * with `credentialOrgGrant`, `credentialOrgRevoke`, and
+ * `credentialOrgGrantList`.
  */
 import {
+	ownerIdFromStored,
 	personalOrgId,
 	type OwnerId,
 	type PersonId,
@@ -22,6 +25,8 @@ import {
 } from '@kody-internal/shared/chunk.ts'
 import { McpCallerError } from '#mcp/caller-error.ts'
 import { AuthorizationError } from '#worker/authorization/authorize.ts'
+import { type OrgAuditWriter } from '#worker/orgs/org-audit-outbox.ts'
+import { runAppDbBatchWithOrgAudit } from '#worker/orgs/org-audit.ts'
 import { isOrgActive, loadOrgBindingForOrg } from '#worker/orgs/repo.ts'
 import {
 	credentialPermissionFamily,
@@ -98,7 +103,8 @@ export async function grantPersonalCredentialToOrg(input: {
 	credentialId: string
 	orgId: OwnerId
 	now?: Date
-}): Promise<PersonalCredential> {
+	audit?: OrgAuditWriter
+}): Promise<PersonalCredential & { created: boolean }> {
 	const ownerOrgId = personalOrgId(input.ownerPersonId)
 	if (input.orgId === ownerOrgId) {
 		throw new McpCallerError(
@@ -125,18 +131,61 @@ export async function grantPersonalCredentialToOrg(input: {
 			'You can only grant a personal credential to an org you belong to.',
 		)
 	}
-	await input.db
+	const existing = await input.db
 		.prepare(
-			`INSERT INTO credential_org_grants (credential_id, user_id, org_id, created_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT (credential_id, org_id) DO NOTHING`,
+			`SELECT 1 AS found FROM credential_org_grants
+			WHERE credential_id = ? AND user_id = ? AND org_id = ?`,
 		)
-		.bind(credential.id, input.ownerPersonId, input.orgId, now.toISOString())
-		.run()
+		.bind(credential.id, input.ownerPersonId, input.orgId)
+		.first<{ found: number }>()
+	if (!existing) {
+		const insert = input.db
+			.prepare(
+				`INSERT INTO credential_org_grants (credential_id, user_id, org_id, created_at)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT (credential_id, org_id) DO NOTHING`,
+			)
+			.bind(credential.id, input.ownerPersonId, input.orgId, now.toISOString())
+		if (input.audit) {
+			await runAppDbBatchWithOrgAudit({
+				appDb: input.db,
+				audit: input.audit,
+				statements: [insert],
+				event: grantAuditEvent({
+					action: 'credential.personal_org_granted',
+					ownerOrgId,
+					credential,
+					orgId: input.orgId,
+				}),
+			})
+		} else {
+			await insert.run()
+		}
+	}
 	return {
 		...credential,
 		ownerKind: 'user',
 		ownerPersonId: input.ownerPersonId,
+		created: !existing,
+	}
+}
+
+/** Grant changes are audited in the owner's personal org, by credential id. */
+function grantAuditEvent(input: {
+	action: 'credential.personal_org_granted' | 'credential.personal_org_revoked'
+	ownerOrgId: OwnerId
+	credential: Pick<OrgCredential, 'id' | 'kind'>
+	orgId: OwnerId
+}) {
+	return {
+		orgId: input.ownerOrgId,
+		action: input.action,
+		resourceType: 'credential',
+		resourceId: input.credential.id,
+		details: {
+			credentialKind: input.credential.kind,
+			grantedOrgId: input.orgId,
+		},
 	}
 }
 
@@ -146,15 +195,126 @@ export async function revokePersonalCredentialOrgGrant(input: {
 	ownerPersonId: PersonId
 	credentialId: string
 	orgId: OwnerId
+	audit?: OrgAuditWriter
 }): Promise<boolean> {
-	const result = await input.db
+	const remove = input.db
 		.prepare(
 			`DELETE FROM credential_org_grants
 			WHERE credential_id = ? AND user_id = ? AND org_id = ?`,
 		)
 		.bind(input.credentialId, input.ownerPersonId, input.orgId)
-		.run()
-	return (result.meta.changes ?? 0) > 0
+	if (!input.audit) {
+		const result = await remove.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+	const ownerOrgId = personalOrgId(input.ownerPersonId)
+	const existing = await input.db
+		.prepare(
+			`SELECT 1 AS found FROM credential_org_grants
+			WHERE credential_id = ? AND user_id = ? AND org_id = ?`,
+		)
+		.bind(input.credentialId, input.ownerPersonId, input.orgId)
+		.first<{ found: number }>()
+	if (!existing) return false
+	const credential = await getOrgCredential(
+		input.db,
+		ownerOrgId,
+		input.credentialId,
+	)
+	await runAppDbBatchWithOrgAudit({
+		appDb: input.db,
+		audit: input.audit,
+		statements: [remove],
+		event: grantAuditEvent({
+			action: 'credential.personal_org_revoked',
+			ownerOrgId,
+			credential: {
+				id: input.credentialId,
+				kind: credential?.kind ?? 'secret',
+			},
+			orgId: input.orgId,
+		}),
+	})
+	return true
+}
+
+export type PersonalCredentialOrgGrant = {
+	credential: OrgCredential
+	org: { id: OwnerId; slug: string; displayName: string | null }
+	createdAt: string
+	/**
+	 * The grant works now: the credential is still usable as a personal
+	 * credential and the owner still belongs to the org.
+	 */
+	active: boolean
+}
+
+/**
+ * The owner's org grants, optionally for one credential. A grant whose
+ * credential was deleted is left out; one that stopped working (expired
+ * value, lost membership) is listed with `active: false`.
+ */
+export async function listPersonalCredentialOrgGrants(input: {
+	db: D1Database
+	ownerPersonId: PersonId
+	credentialId?: string
+	now?: Date
+}): Promise<Array<PersonalCredentialOrgGrant>> {
+	const ownerOrgId = personalOrgId(input.ownerPersonId)
+	const rows = await input.db
+		.prepare(
+			`SELECT g.credential_id, g.org_id, g.created_at, o.slug, o.display_name
+			FROM credential_org_grants g
+			JOIN orgs o ON o.id = g.org_id AND o.deleted_at IS NULL
+			WHERE g.user_id = ?${input.credentialId ? ' AND g.credential_id = ?' : ''}
+			ORDER BY o.slug, g.credential_id`,
+		)
+		.bind(
+			input.ownerPersonId,
+			...(input.credentialId ? [input.credentialId] : []),
+		)
+		.all<{
+			credential_id: string
+			org_id: string
+			created_at: string
+			slug: string
+			display_name: string | null
+		}>()
+	const grants = rows.results ?? []
+	const ids = [...new Set(grants.map((row) => row.credential_id))]
+	const [credentials, usable] = await Promise.all([
+		listOrgCredentialsByIds(input.db, ownerOrgId, ids),
+		loadPersonalCredentials(
+			input.db,
+			input.ownerPersonId,
+			ids,
+			input.now ?? new Date(),
+		),
+	])
+	const bound = new Map<string, boolean>()
+	for (const orgId of new Set(grants.map((row) => row.org_id))) {
+		bound.set(
+			orgId,
+			Boolean(await loadOrgBindingForOrg(input.db, input.ownerPersonId, orgId)),
+		)
+	}
+	return grants.flatMap((row) => {
+		const credential = credentials.get(row.credential_id)
+		if (!credential?.live) return []
+		return [
+			{
+				credential,
+				org: {
+					id: ownerIdFromStored(row.org_id),
+					slug: row.slug,
+					displayName: row.display_name,
+				},
+				createdAt: row.created_at,
+				active:
+					usable.has(row.credential_id) && (bound.get(row.org_id) ?? false),
+			},
+		]
+	})
 }
 
 /** Org access ended: the person's personal credentials stop working there. */
