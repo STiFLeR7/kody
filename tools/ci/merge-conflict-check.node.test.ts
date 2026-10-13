@@ -275,6 +275,27 @@ test('a dirty pull request fails a check on the head SHA', async () => {
 	expect(github.calls[2]?.authorization).toBe('Bearer test-token')
 })
 
+test('a known conflict retries publication instead of posting neutral', async () => {
+	const github = fakeGithub({
+		pulls: {
+			91: [pull({ mergeable: false, mergeable_state: 'dirty' })],
+		},
+		failChecks: 1,
+	})
+	consoleError.mockImplementation(() => {})
+	const code = await reportMergeConflictCheck({
+		...repo,
+		pullNumber: 91,
+		headSha,
+		fetchImpl: github.fetchImpl,
+		maxAttempts: 1,
+	})
+	expect(code).toBe(0)
+	expect(github.bodies('POST', 'conclusion')).toEqual(['failure', 'failure'])
+	expect(github.bodies('POST', 'conclusion')).not.toContain('neutral')
+	expect(loggedErrors()).toContain('failed (500)')
+})
+
 test('a mergeable pull request completes the check successfully', async () => {
 	const github = fakeGithub({
 		pulls: {
@@ -772,6 +793,8 @@ function fakeGithub(input: {
 	compareAheadBy?: Record<string, number>
 	failCompare?: boolean
 	failPulls?: boolean
+	/** Fail the first N check-run POSTs with HTTP 500, then succeed. */
+	failChecks?: number
 	rateLimit?: {
 		pulls?: number
 		compare?: number
@@ -786,6 +809,7 @@ function fakeGithub(input: {
 		compare: input.rateLimit?.compare ?? 0,
 		checks: input.rateLimit?.checks ?? 0,
 		list: input.rateLimit?.list ?? 0,
+		failChecks: input.failChecks ?? 0,
 	}
 	const calls: Array<RecordedCall> = []
 	const fetchImpl: typeof fetch = (request, init) => {
@@ -840,6 +864,10 @@ function fakeGithub(input: {
 			if (remaining.checks > 0) {
 				remaining.checks -= 1
 				return Promise.resolve(rateLimitResponse(input.rateLimit))
+			}
+			if (remaining.failChecks > 0) {
+				remaining.failChecks -= 1
+				return Promise.resolve(new Response('unavailable', { status: 500 }))
 			}
 			return Promise.resolve(Response.json({ id: calls.length }))
 		}

@@ -222,25 +222,26 @@ async function runMergeConflictCheck(
 		)
 		return 0
 	}
+	let knownResult: ResolvedMergeability | null = null
 	try {
 		if (
 			await headHasNoUniqueCommits(client, input.expectedBaseSha, input.headSha)
 		) {
 			return 0
 		}
-		const result = await pollMergeability({
+		knownResult = await pollMergeability({
 			read: () => client.readPullRequest(input.pullNumber),
 			sleep,
 			maxAttempts: input.maxAttempts ?? mergeConflictPollAttempts,
 			delayMs: input.delayMs ?? mergeConflictPollDelayMs,
 			expectedBaseSha: input.expectedBaseSha,
 		})
-		await client.publishCheck(input.headSha, result)
+		await client.publishCheck(input.headSha, knownResult)
 		// This job is recorded on the default-branch SHA. Exit 0 after the
 		// head check is published so a conflict does not fail that commit.
 		// `gh pr checks` reads the head SHA check.
-		const described = describeMergeConflictCheck(result)
-		console.log(mergeConflictCheckLogLine(result.kind))
+		const described = describeMergeConflictCheck(knownResult)
+		console.log(mergeConflictCheckLogLine(knownResult.kind))
 		console.log(described.summary)
 		return 0
 	} catch (error) {
@@ -251,6 +252,23 @@ async function runMergeConflictCheck(
 				`Deferred ${mergeConflictCheckName}: GitHub API rate limited.`,
 			)
 			return 0
+		}
+		// Never downgrade a known conflicted/clear result to undetermined
+		// (neutral). Retry the known result once; if publication still fails,
+		// exit non-zero without posting a masking neutral check.
+		if (knownResult) {
+			try {
+				await client.publishCheck(input.headSha, knownResult)
+				const described = describeMergeConflictCheck(knownResult)
+				console.log(mergeConflictCheckLogLine(knownResult.kind))
+				console.log(described.summary)
+				return 0
+			} catch (retryError) {
+				console.error(
+					retryError instanceof Error ? retryError.message : String(retryError),
+				)
+				return 1
+			}
 		}
 		const published = await publishCheckAfterError(
 			client,
