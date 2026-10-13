@@ -1,12 +1,15 @@
 import { expect, test } from 'vitest'
 import {
 	buildMcpOAuthAttemptIdentity,
+	markMcpOAuthAttemptVerified,
 	mcpOAuthAttemptStorageKey,
+	mcpOAuthAttemptVerifiedStorageKey,
 	oauthAttemptMatchesLiveServer,
 	parseMcpOAuthAttemptIdentity,
 	writeMcpOAuthAttemptIdentity,
 	readMcpOAuthAttemptIdentity,
 	clearMcpOAuthAttemptIdentity,
+	isMcpOAuthAttemptVerified,
 } from './oauth-attempt.ts'
 
 const serverUrl = 'https://mcp.example/mcp'
@@ -132,8 +135,10 @@ test('attempt identity storage round-trips and rejects malformed rows', async ()
 		put: async (key: string, value: unknown) => {
 			values.set(key, value)
 		},
-		delete: async (key: string) => {
-			values.delete(key)
+		delete: async (key: string | Array<string>) => {
+			for (const item of Array.isArray(key) ? key : [key]) {
+				values.delete(item)
+			}
 		},
 	}
 	const identity = buildMcpOAuthAttemptIdentity({
@@ -147,8 +152,12 @@ test('attempt identity storage round-trips and rejects malformed rows', async ()
 	await writeMcpOAuthAttemptIdentity(storage, identity!)
 	expect(values.get(mcpOAuthAttemptStorageKey('srv-1'))).toEqual(identity)
 	expect(await readMcpOAuthAttemptIdentity(storage, 'srv-1')).toEqual(identity)
+	await markMcpOAuthAttemptVerified(storage, 'srv-1')
+	expect(await isMcpOAuthAttemptVerified(storage, 'srv-1')).toBe(true)
 	await clearMcpOAuthAttemptIdentity(storage, 'srv-1')
 	expect(await readMcpOAuthAttemptIdentity(storage, 'srv-1')).toBeNull()
+	expect(await isMcpOAuthAttemptVerified(storage, 'srv-1')).toBe(false)
+	expect(values.get(mcpOAuthAttemptVerifiedStorageKey('srv-1'))).toBeUndefined()
 	expect(parseMcpOAuthAttemptIdentity({ serverId: 'srv-1' })).toBeNull()
 	expect(
 		parseMcpOAuthAttemptIdentity({

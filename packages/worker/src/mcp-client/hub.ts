@@ -77,6 +77,7 @@ import {
 } from './restore.ts'
 import {
 	mcpOAuthAttemptStorageKey,
+	mcpOAuthAttemptVerifiedStorageKey,
 	readMcpOAuthAttemptIdentity,
 	writeMcpOAuthAttemptIdentity,
 	type McpOAuthAttemptActor,
@@ -113,6 +114,15 @@ const connectionSettleTimeoutMs = 8_000
 const discoverTimeoutMs = 15_000
 const oauthRecoveryMessage =
 	'Authorization needed. Reconnect the MCP server and approve access once more.'
+
+function clientIdFromStoredAuthUrl(authUrl: string | null) {
+	if (!authUrl) return null
+	try {
+		return new URL(authUrl).searchParams.get('client_id')
+	} catch {
+		return null
+	}
+}
 
 export function isRecoverableMcpOAuthStateError(error: string | null) {
 	if (!error) return false
@@ -204,21 +214,29 @@ class McpClientHubBase extends DurableObject<Env> {
 	 * the provider presents credentials to the authorization server. Owner org
 	 * and person come from the current RPC actor (add/reconnect/consent/callback).
 	 */
-	private resolveLiveOAuthServerIdentity(serverId: string) {
+	private async resolveLiveOAuthServerIdentity(serverId: string) {
 		const row = this.manager
 			.listServers()
 			.find((server) => server.id === serverId)
-		if (!row) return Promise.resolve(null)
-		const preRegisteredClientId =
+		if (!row) return null
+		let preRegisteredClientId =
 			this.preRegisteredClientIds.get(serverId) ?? null
-		return Promise.resolve({
+		if (!preRegisteredClientId) {
+			const sealed = await this.readSealedPreRegisteredOAuthClient(serverId)
+			if (sealed) {
+				preRegisteredClientId = sealed.clientId
+				this.preRegisteredClientIds.set(serverId, sealed.clientId)
+			}
+		}
+		const authUrlClientId = clientIdFromStoredAuthUrl(row.auth_url)
+		return {
 			serverId: row.id,
 			serverUrl: row.server_url,
-			clientId: preRegisteredClientId ?? row.client_id,
+			clientId: preRegisteredClientId ?? row.client_id ?? authUrlClientId,
 			ownerOrgId: this.oauthActor?.ownerOrgId ?? null,
 			personId: this.oauthActor?.personId ?? null,
 			name: row.name,
-		})
+		}
 	}
 
 	/**
@@ -288,9 +306,11 @@ class McpClientHubBase extends DurableObject<Env> {
 		sanitizeStoredMcpSessions(this.ctx.storage, {
 			keepLegacyHandshakeIds: await this.readLegacyHandshakeServerIds(),
 		})
+		// Hydrate before start so restore-time token refresh sees pre-registered
+		// client ids when fencing an in-flight or refreshed grant.
+		await this.hydratePreRegisteredClientIds()
 		await this.lifecycle.start()
 		await this.hydrateTokenRecoveryErrors()
-		await this.hydratePreRegisteredClientIds()
 	}
 
 	private async hydratePreRegisteredClientIds() {
@@ -551,6 +571,7 @@ class McpClientHubBase extends DurableObject<Env> {
 			mcpOAuthRefreshTokenStorageKey(input.serverId),
 			mcpPreRegisteredOAuthClientStorageKey(input.serverId),
 			mcpOAuthAttemptStorageKey(input.serverId),
+			mcpOAuthAttemptVerifiedStorageKey(input.serverId),
 		])
 	}
 
@@ -940,6 +961,16 @@ class McpClientHubBase extends DurableObject<Env> {
 		if (sidecarValue !== undefined) {
 			oauthStorageSnapshot.set(sidecarKey, sidecarValue)
 		}
+		const attemptKey = mcpOAuthAttemptStorageKey(input.serverId)
+		const attemptValue = await this.ctx.storage.get(attemptKey)
+		if (attemptValue !== undefined) {
+			oauthStorageSnapshot.set(attemptKey, attemptValue)
+		}
+		const attemptVerifiedKey = mcpOAuthAttemptVerifiedStorageKey(input.serverId)
+		const attemptVerifiedValue = await this.ctx.storage.get(attemptVerifiedKey)
+		if (attemptVerifiedValue !== undefined) {
+			oauthStorageSnapshot.set(attemptVerifiedKey, attemptVerifiedValue)
+		}
 
 		try {
 			await this.manager.removeServer(input.serverId)
@@ -1044,7 +1075,10 @@ class McpClientHubBase extends DurableObject<Env> {
 			keys.push(mcpOAuthRefreshTokenStorageKey(input.serverId))
 		}
 		// A reconnect or client reset retires any in-flight attempt identity.
-		keys.push(mcpOAuthAttemptStorageKey(input.serverId))
+		keys.push(
+			mcpOAuthAttemptStorageKey(input.serverId),
+			mcpOAuthAttemptVerifiedStorageKey(input.serverId),
+		)
 		if (keys.length > 0) {
 			await this.ctx.storage.delete(keys)
 		}

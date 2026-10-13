@@ -10,7 +10,9 @@ import {
 } from './client-id-metadata.ts'
 import {
 	buildMcpOAuthAttemptIdentity,
+	markMcpOAuthAttemptVerified,
 	mcpOAuthAttemptStorageKey,
+	mcpOAuthAttemptVerifiedStorageKey,
 	McpOAuthAttemptIdentityError,
 	writeMcpOAuthAttemptIdentity,
 } from './oauth-attempt.ts'
@@ -281,16 +283,28 @@ test('OAuth attempt identity: happy path, remove/re-add, client mismatch, and re
 	expect(pending).not.toBeNull()
 	await provider.saveDiscoveryState(discoveryOnIssuer as never)
 	await writeMcpOAuthAttemptIdentity(storage, pending!)
+	await markMcpOAuthAttemptVerified(storage, 'server-home')
 	await provider.saveTokens(bearer('grant-at', 'grant-rt'))
 	expect(values.get(tokenKey)).toEqual(bearer('grant-at', 'grant-rt'))
 	expect(values.get(mcpOAuthAttemptStorageKey('server-home'))).toBeUndefined()
+	expect(
+		values.get(mcpOAuthAttemptVerifiedStorageKey('server-home')),
+	).toBeUndefined()
 
 	// Refresh / later saves without a pending attempt still work (existing grants).
 	await provider.saveTokens(bearer('refreshed-at'))
 	expect(values.get(tokenKey)).toEqual(bearer('refreshed-at', 'grant-rt'))
 
-	// Remove and re-add mid-flow: new stable id, nothing saved from the old attempt.
+	// Refresh while an attempt is pending (not yet verified) must not clear it.
 	await writeMcpOAuthAttemptIdentity(storage, pending!)
+	await provider.saveTokens(bearer('refresh-during-attempt'))
+	expect(values.get(tokenKey)).toEqual(
+		bearer('refresh-during-attempt', 'grant-rt'),
+	)
+	expect(values.get(mcpOAuthAttemptStorageKey('server-home'))).toEqual(pending)
+
+	// Remove and re-add mid-flow: new stable id, nothing saved from the old attempt.
+	await markMcpOAuthAttemptVerified(storage, 'server-home')
 	currentLive = {
 		...live,
 		serverId: 'server-readded',
@@ -298,26 +312,34 @@ test('OAuth attempt identity: happy path, remove/re-add, client mismatch, and re
 	await expect(
 		provider.saveTokens(bearer('stolen-at', 'stolen-rt')),
 	).rejects.toBeInstanceOf(McpOAuthAttemptIdentityError)
-	expect(values.get(tokenKey)).toEqual(bearer('refreshed-at', 'grant-rt'))
+	expect(values.get(tokenKey)).toEqual(
+		bearer('refresh-during-attempt', 'grant-rt'),
+	)
 	expect(values.get(mcpOAuthAttemptStorageKey('server-home'))).toBeUndefined()
 
 	// Client replaced mid-flow.
 	currentLive = { ...live }
 	await writeMcpOAuthAttemptIdentity(storage, pending!)
+	await markMcpOAuthAttemptVerified(storage, 'server-home')
 	currentLive = { ...live, clientId: 'other-client' }
 	await expect(
 		provider.saveTokens(bearer('other-at', 'other-rt')),
 	).rejects.toThrow(/Reconnect at \/account\/mcp-servers/)
-	expect(values.get(tokenKey)).toEqual(bearer('refreshed-at', 'grant-rt'))
+	expect(values.get(tokenKey)).toEqual(
+		bearer('refresh-during-attempt', 'grant-rt'),
+	)
 
 	// Person mismatch mid-flow.
 	currentLive = { ...live }
 	await writeMcpOAuthAttemptIdentity(storage, pending!)
+	await markMcpOAuthAttemptVerified(storage, 'server-home')
 	currentLive = { ...live, personId: 'person-other' }
 	await expect(
 		provider.saveTokens(bearer('person-at', 'person-rt')),
 	).rejects.toBeInstanceOf(McpOAuthAttemptIdentityError)
-	expect(values.get(tokenKey)).toEqual(bearer('refreshed-at', 'grant-rt'))
+	expect(values.get(tokenKey)).toEqual(
+		bearer('refresh-during-attempt', 'grant-rt'),
+	)
 })
 
 test('checkState fails closed when the live server no longer matches the attempt', async () => {
@@ -352,9 +374,18 @@ test('checkState fails closed when the live server no longer matches the attempt
 		valid: true,
 		serverId: 'server-home',
 	})
+	expect(
+		await storage.get(mcpOAuthAttemptVerifiedStorageKey('server-home')),
+	).toMatchObject({ verifiedAt: expect.any(Number) })
 
 	currentLive = null
 	const refused = await provider.checkState(state)
 	expect(refused.valid).toBe(false)
 	expect(refused.error).toMatch(/Reconnect at \/account\/mcp-servers/)
+	expect(
+		await storage.get(mcpOAuthAttemptStorageKey('server-home')),
+	).toBeUndefined()
+	expect(
+		await storage.get(mcpOAuthAttemptVerifiedStorageKey('server-home')),
+	).toBeUndefined()
 })

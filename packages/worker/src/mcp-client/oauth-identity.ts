@@ -79,7 +79,19 @@ export function assertEndpointsOnIssuerOrigin(discovery: unknown): void {
 			? (record['authorizationServerMetadata'] as Record<string, unknown>)
 			: record
 	const issuerValue = metadata['issuer']
-	if (typeof issuerValue !== 'string' || !issuerValue) return
+	const endpointFields = ['authorization_endpoint', 'token_endpoint'] as const
+	const hasEndpoint = endpointFields.some((field) => {
+		const value = metadata[field]
+		return typeof value === 'string' && value.length > 0
+	})
+	if (typeof issuerValue !== 'string' || !issuerValue) {
+		if (hasEndpoint) {
+			throw new Error(
+				'Authorization server metadata is missing issuer while advertising authorization or token endpoints.',
+			)
+		}
+		return
+	}
 	let issuerOrigin: string
 	try {
 		issuerOrigin = new URL(issuerValue).origin
@@ -88,7 +100,7 @@ export function assertEndpointsOnIssuerOrigin(discovery: unknown): void {
 			`Authorization server issuer (${issuerValue.slice(0, 200)}) is not a valid URL.`,
 		)
 	}
-	for (const field of ['authorization_endpoint', 'token_endpoint'] as const) {
+	for (const field of endpointFields) {
 		const value = metadata[field]
 		if (typeof value !== 'string' || !value) continue
 		let origin: string | null = null

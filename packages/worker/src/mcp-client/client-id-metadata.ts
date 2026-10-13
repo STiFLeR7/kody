@@ -2,6 +2,8 @@ import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-pro
 import {
 	buildMcpOAuthAttemptIdentity,
 	clearMcpOAuthAttemptIdentity,
+	isMcpOAuthAttemptVerified,
+	markMcpOAuthAttemptVerified,
 	mcpOAuthAttemptCheckFailure,
 	McpOAuthAttemptIdentityError,
 	oauthAttemptMatchesLiveServer,
@@ -156,12 +158,13 @@ export function createMcpClientOAuthProvider(
 		mcpClientName,
 		callbackUrl,
 	) as McpClientOAuthProvider
-	// Attempt binding wraps discovery / checkState / redirect first so token
-	// preservation re-saves discovery through the same issuer-origin fence.
-	installMcpOAuthAttemptBinding(provider, {
+	// Token preservation binds the raw discovery writer first so refresh can
+	// re-save legacy discovery without the new-issuer-origin fence. Attempt
+	// binding then wraps public saveDiscoveryState / checkState / redirect.
+	installMcpOAuthTokenPreservation(provider, {
 		resolveLiveServerIdentity: options?.resolveLiveServerIdentity,
 	})
-	installMcpOAuthTokenPreservation(provider, {
+	installMcpOAuthAttemptBinding(provider, {
 		resolveLiveServerIdentity: options?.resolveLiveServerIdentity,
 	})
 	if (options?.resolvePreRegisteredClient) {
@@ -250,6 +253,9 @@ function installMcpOAuthAttemptBinding(
 				await clearMcpOAuthAttemptIdentity(provider.storage, result.serverId)
 				return mcpOAuthAttemptCheckFailure({ serverName: live?.name })
 			}
+			// Only authorization-code completion (after checkState) may consume
+			// the pending attempt in saveTokens; refresh must leave it alone.
+			await markMcpOAuthAttemptVerified(provider.storage, result.serverId)
 			return result
 		}
 	}
@@ -364,13 +370,19 @@ async function savePreservedMcpOAuthTokens(input: {
 	const pending = serverId
 		? await readMcpOAuthAttemptIdentity(input.provider.storage, serverId)
 		: null
+	const completingAuthorization =
+		Boolean(pending) &&
+		Boolean(serverId) &&
+		(await isMcpOAuthAttemptVerified(input.provider.storage, serverId!))
 	const [existing, discovery] = await Promise.all([
 		input.readTokens(input.context).catch(() => undefined),
 		input.readDiscovery(),
 	])
-	if (pending) {
-		// Authorization-code completion: re-check identity immediately before
-		// the grant write (kody-celld #57 / #65). Refresh has no pending row.
+	if (completingAuthorization && pending) {
+		// Authorization-code completion after checkState: re-check identity
+		// immediately before the grant write (kody-celld #57 / #65). A refresh
+		// that races while an attempt is pending has no verified flag and must
+		// leave the pending row alone.
 		if (!serverId || !input.resolveLiveServerIdentity) {
 			await clearMcpOAuthAttemptIdentity(
 				input.provider.storage,
@@ -411,7 +423,7 @@ async function savePreservedMcpOAuthTokens(input: {
 	if (discovery !== undefined) {
 		await input.writeDiscovery(discovery)
 	}
-	if (pending && serverId) {
+	if (completingAuthorization && serverId) {
 		await clearMcpOAuthAttemptIdentity(input.provider.storage, serverId)
 	}
 }

@@ -10,9 +10,15 @@ import {
 } from './oauth-identity.ts'
 
 export const mcpOAuthAttemptStoragePrefix = 'mcp-oauth-attempt/'
+export const mcpOAuthAttemptVerifiedStoragePrefix =
+	'mcp-oauth-attempt-verified/'
 
 export function mcpOAuthAttemptStorageKey(serverId: string) {
 	return `${mcpOAuthAttemptStoragePrefix}${serverId}`
+}
+
+export function mcpOAuthAttemptVerifiedStorageKey(serverId: string) {
+	return `${mcpOAuthAttemptVerifiedStoragePrefix}${serverId}`
 }
 
 /**
@@ -189,7 +195,7 @@ export function oauthAttemptMatchesLiveServer(input: {
 type McpOAuthAttemptStorage = {
 	get(key: string): Promise<unknown>
 	put(key: string, value: unknown): Promise<unknown>
-	delete(key: string): Promise<unknown>
+	delete(key: string | Array<string>): Promise<unknown>
 }
 
 export async function readMcpOAuthAttemptIdentity(
@@ -212,7 +218,28 @@ export async function clearMcpOAuthAttemptIdentity(
 	storage: McpOAuthAttemptStorage,
 	serverId: string,
 ) {
-	await storage.delete(mcpOAuthAttemptStorageKey(serverId))
+	await storage.delete([
+		mcpOAuthAttemptStorageKey(serverId),
+		mcpOAuthAttemptVerifiedStorageKey(serverId),
+	])
+}
+
+export async function markMcpOAuthAttemptVerified(
+	storage: McpOAuthAttemptStorage,
+	serverId: string,
+) {
+	await storage.put(mcpOAuthAttemptVerifiedStorageKey(serverId), {
+		verifiedAt: Date.now(),
+	})
+}
+
+export async function isMcpOAuthAttemptVerified(
+	storage: McpOAuthAttemptStorage,
+	serverId: string,
+) {
+	return (
+		(await storage.get(mcpOAuthAttemptVerifiedStorageKey(serverId))) != null
+	)
 }
 
 export function mcpOAuthAttemptCheckFailure(input?: {
