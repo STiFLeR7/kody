@@ -1313,6 +1313,13 @@ test('executor maps secret errors, formats guidance, and truncates on UTF-8 boun
 		secretNames: ['missingToken'],
 		suggestedAction: { type: 'connect_secret', reason: 'collect_secret' },
 	})
+	expect(
+		getExecutionErrorDetails(
+			new Error(createMissingSecretMessage('missingToken')),
+		)?.nextStep,
+	).toContain(
+		'/connect/credential?kind=secret&kindMode=required&name=missingToken',
+	)
 
 	const reconnectHref =
 		'/connect/oauth?provider=google&loginHint=kent%40gmail.com'

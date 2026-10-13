@@ -18,8 +18,10 @@ import { type RequestContext } from '@kody-internal/shared/request-context.ts'
 import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { McpCallerError } from '#mcp/caller-error.ts'
 import { AuthorizationError } from '#worker/authorization/authorize.ts'
+import { getDiscoverablePlatformOauthApp } from '#worker/integrations/platform-apps.ts'
 import { getSavedPackageById } from '#worker/package-registry/repo.ts'
 import { type PackageCredentialKind } from '#worker/package-registry/types.ts'
+import { buildCredentialCreateUrl } from '#universal/credential-contracts.ts'
 import {
 	CredentialClientHandleError,
 	signCredentialClientHandle,
@@ -76,6 +78,8 @@ export type CredentialClientErrorBody = {
 	retryWith: Array<CredentialClientRetry>
 	options?: Array<CredentialClientOption>
 	possibleMatches?: Array<CredentialClientOption>
+	/** Absolute creation link; always set for unbound and not-found errors. */
+	createUrl?: string
 }
 
 export class CredentialClientError extends McpCallerError {
@@ -94,17 +98,38 @@ function refusal(
 	message: string,
 	extra: Partial<CredentialClientErrorBody> = {},
 ) {
-	return new CredentialClientError({ code, message, retryWith: [], ...extra })
+	// The link rides in the message too: a fetch rejection carries only that.
+	const text = extra.createUrl
+		? `${message} Create one at ${extra.createUrl}`
+		: message
+	return new CredentialClientError({
+		code,
+		message: text,
+		retryWith: [],
+		...extra,
+	})
 }
 
-/** The structured error for a failure from the door, else null. */
-export function toCredentialClientError(error: unknown) {
+/**
+ * The structured error for a failure from the door, else null. With a
+ * `baseUrl`, a not-found error from the door carries a creation link.
+ */
+export function toCredentialClientError(
+	error: unknown,
+	options: { baseUrl?: string } = {},
+) {
 	if (error instanceof CredentialClientError) return error
 	if (error instanceof CredentialRequestRefusedError) {
 		return refusal(error.code, error.message)
 	}
 	if (error instanceof CredentialNotFoundError) {
-		return refusal('credential_not_found', error.message)
+		return refusal(
+			'credential_not_found',
+			error.message,
+			options.baseUrl
+				? { createUrl: buildCredentialCreateUrl(options.baseUrl, {}) }
+				: {},
+		)
 	}
 	if (error instanceof CredentialLoginFailedError) {
 		return refusal('login_failed', error.message)
@@ -186,19 +211,60 @@ function retryFor(key: string | null, credential: UsableCredential) {
 }
 
 async function loadNeed(ctx: CredentialClientContext, key: string) {
-	if (!ctx.packageId) return null
+	if (!ctx.packageId) return { need: null, packageKodyId: null }
 	const request = requireActorRequest(ctx)
 	const saved = await getSavedPackageById(ctx.env.APP_DB, {
 		userId: request.org.id,
 		packageId: ctx.packageId,
 	})
-	if (!saved) return null
+	if (!saved) return { need: null, packageKodyId: null }
 	const needs = await loadPublishedCredentialNeeds({
 		env: ctx.env,
 		userId: saved.userId,
 		sourceId: saved.sourceId,
 	})
-	return needs.find((need) => need.key === key) ?? null
+	return {
+		need: needs.find((need) => need.key === key) ?? null,
+		packageKodyId: saved.kodyId,
+	}
+}
+
+const providerSlugPattern = /^[a-z0-9-]+$/
+
+/**
+ * The creation link for an unbound need. A declared kind is locked; without
+ * one the page suggests OAuth when a built-in app exists for the provider,
+ * else a Key, and shows the kind chooser.
+ */
+async function createUrlForNeed(
+	ctx: CredentialClientContext,
+	input: {
+		key: string
+		provider: string
+		need: Awaited<ReturnType<typeof loadNeed>>['need']
+		packageKodyId: string | null
+	},
+) {
+	const declaredKind: PackageCredentialKind | null = input.need?.kind ?? null
+	const providerSlug = providerSlugPattern.test(input.provider)
+		? input.provider
+		: null
+	const builtInOauth =
+		!declaredKind && providerSlug
+			? await getDiscoverablePlatformOauthApp({
+					db: ctx.env.APP_DB,
+					slug: providerSlug,
+				}).catch(() => null)
+			: null
+	return buildCredentialCreateUrl(ctx.callerContext.baseUrl, {
+		kind: declaredKind ?? (builtInOauth ? 'oauth' : 'secret'),
+		kindMode: declaredKind ? 'required' : 'hint',
+		name: input.key,
+		provider: providerSlug,
+		description: input.need?.description,
+		packageKodyId: input.packageKodyId,
+		needKey: input.need ? input.key : null,
+	})
 }
 
 /**
@@ -226,11 +292,12 @@ async function assertNamedAllowed(ctx: CredentialClientContext) {
 	}
 }
 
-function pickOne(input: {
+async function pickOne(input: {
 	key: string | null
 	candidates: Array<UsableCredential>
 	possibleMatches: Array<UsableCredential>
 	describe: string
+	createUrl: () => Promise<string>
 }) {
 	const [only, second] = input.candidates
 	if (only && !second) return only
@@ -247,6 +314,7 @@ function pickOne(input: {
 					retryFor(input.key, match),
 				),
 				possibleMatches: input.possibleMatches.map(toOption),
+				createUrl: await input.createUrl(),
 			},
 		)
 	}
@@ -279,23 +347,27 @@ export async function openCredentialClient(
 			(credential) =>
 				credential.name === name && (!scope || credential.scope === scope),
 		)
+		const createUrl = async () =>
+			buildCredentialCreateUrl(ctx.callerContext.baseUrl, { name })
 		if (matches.length === 0) {
 			throw refusal(
 				'credential_not_found',
 				`No credential named "${name}" that you can use${scope ? ` in ${scope} scope` : ''}.`,
+				{ createUrl: await createUrl() },
 			)
 		}
-		picked = pickOne({
+		picked = await pickOne({
 			key: null,
 			candidates: matches,
 			possibleMatches: [],
 			describe: `the name "${name}"`,
+			createUrl,
 		})
 	} else {
-		const need = await loadNeed(ctx, key!)
+		const { need, packageKodyId } = await loadNeed(ctx, key!)
 		const kind = need?.kind ?? null
 		const provider = need?.provider ?? key!
-		picked = pickOne({
+		picked = await pickOne({
 			key,
 			candidates: usable.filter(
 				(credential) =>
@@ -311,6 +383,8 @@ export async function openCredentialClient(
 			describe: kind
 				? `need "${key}" (${kind} from provider "${provider}")`
 				: `provider "${provider}"`,
+			createUrl: () =>
+				createUrlForNeed(ctx, { key: key!, provider, need, packageKodyId }),
 		})
 	}
 	if (picked.kind === 'mcp' && picked.scope === 'personal') {
@@ -377,11 +451,14 @@ function doorInput<T extends CredentialTarget>(
 	}
 }
 
-async function withClientErrors<T>(run: () => Promise<T>) {
+async function withClientErrors<T>(
+	baseUrl: string | undefined,
+	run: () => Promise<T>,
+) {
 	try {
 		return await run()
 	} catch (error) {
-		throw toCredentialClientError(error) ?? error
+		throw toCredentialClientError(error, { baseUrl }) ?? error
 	}
 }
 
@@ -389,7 +466,7 @@ export async function signWithCredentialClient(
 	ctx: CredentialClientContext,
 	input: { handle?: unknown; host?: unknown; operation?: unknown },
 ) {
-	return await withClientErrors(async () => {
+	return await withClientErrors(ctx.callerContext.baseUrl, async () => {
 		const handle = await readHandle(ctx, input.handle, ['signing'], 'sign()')
 		const host = readText(input.host, 'sign() host')
 		const operation = input.operation as SigningOperation | undefined
@@ -418,7 +495,7 @@ export async function callToolWithCredentialClient(
 	ctx: CredentialClientContext,
 	input: { handle?: unknown; tool?: unknown; args?: unknown },
 ): Promise<CallToolResult> {
-	return await withClientErrors(async () => {
+	return await withClientErrors(ctx.callerContext.baseUrl, async () => {
 		const handle = await readHandle(ctx, input.handle, ['mcp'], 'callTool()')
 		const toolName = readText(input.tool, 'callTool() tool name')
 		const args =
@@ -448,7 +525,7 @@ export async function refreshCredentialClient(
 	ctx: CredentialClientContext,
 	input: { handle?: unknown },
 ) {
-	return await withClientErrors(async () => {
+	return await withClientErrors(ctx.callerContext.baseUrl, async () => {
 		const handle = await readHandle(ctx, input.handle, ['oauth'], 'refresh')
 		return await resolveCredential(
 			doorInput(ctx, {
@@ -498,7 +575,7 @@ export async function applyCredentialClient(input: {
 	token: string
 	requestUrl: URL
 }): Promise<AppliedCredentialClient> {
-	return await withClientErrors(async () => {
+	return await withClientErrors(input.baseUrl, async () => {
 		const handle = await verifyCredentialClientHandle({
 			env: input.env,
 			token: input.token,

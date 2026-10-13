@@ -426,6 +426,59 @@ test('a declared need picks by its kind and provider, and offers same-kind crede
 	).resolves.toMatchObject({ key: 'MAIL', name: 'resend-prod' })
 })
 
+test('unbound and not-found errors always carry a creation link, locking a declared kind', async () => {
+	const t = await setup()
+	const bea = t.requestAs('bea', 'owner')
+	const adHoc = await rejection(
+		openCredentialClient(t.contextFor({ request: bea }), { key: 'resend' }),
+	)
+	const adHocUrl =
+		'https://example.com/connect/credential?kind=secret&name=resend&provider=resend'
+	expect(adHoc.body).toMatchObject({
+		code: 'credential_unbound',
+		createUrl: adHocUrl,
+	})
+	expect(adHoc.message).toContain(`Create one at ${adHocUrl}`)
+
+	const packageId = await t.savePackage({
+		ownerId: t.acmeId,
+		name: '@acme/digest',
+	})
+	mockNeeds([
+		{
+			key: 'github',
+			kind: 'oauth',
+			description: 'Read PRs to summarize them',
+		},
+	])
+	const declared = await rejection(
+		openCredentialClient(t.contextFor({ request: bea, packageId }), {
+			key: 'github',
+		}),
+	)
+	const declaredUrl = new URL(
+		(declared.body as { createUrl: string }).createUrl,
+	)
+	expect(declaredUrl.pathname).toBe('/connect/credential')
+	expect(Object.fromEntries(declaredUrl.searchParams)).toEqual({
+		kind: 'oauth',
+		kindMode: 'required',
+		name: 'github',
+		provider: 'github',
+		description: 'Read PRs to summarize them',
+		package: expect.any(String),
+		need: 'github',
+	})
+
+	const named = await rejection(
+		openCredentialClient(t.contextFor({ request: bea }), { name: 'missing' }),
+	)
+	expect(named.body).toMatchObject({
+		code: 'credential_not_found',
+		createUrl: 'https://example.com/connect/credential?name=missing',
+	})
+})
+
 test('credential.named works in ad hoc code and unshared personal packages only', async () => {
 	const t = await setup()
 	await t.storeKey({ name: 'resend-prod' })

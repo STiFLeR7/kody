@@ -57,6 +57,7 @@ const robotsDisallowPaths = [
 	'/connect/oauth',
 	'/connect/secrets',
 	'/connect/secret-set',
+	'/connect/credential',
 ] as const
 
 export type AgentSkillDefinition = {

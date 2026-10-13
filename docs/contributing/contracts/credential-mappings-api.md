@@ -459,8 +459,9 @@ export type CredentialClientErrorBody = {
   prefilled.
 - `credential_not_found` for `credential.named(name)` links with `name`
   prefilled and no kind.
-- A missing `{{secret:NAME}}` placeholder in a run keeps its existing
-  `nextStep`, with an absolute creation link (`kind=secret&kindMode=required`).
+- A missing `{{secret:NAME}}` placeholder in a run keeps its `secret_required`
+  details; its `nextStep` points at the creation link
+  (`/connect/credential?kind=secret&kindMode=required&name=NAME`).
 
 ## Redirects
 

@@ -33,6 +33,7 @@ function __kodyCreateCredentialRuntime(__kodyCredentialCall) {
     error.retryWith = Array.isArray(body?.retryWith) ? body.retryWith : [];
     if (Array.isArray(body?.options)) error.options = body.options;
     if (Array.isArray(body?.possibleMatches)) error.possibleMatches = body.possibleMatches;
+    if (typeof body?.createUrl === 'string') error.createUrl = body.createUrl;
     return error;
   };
   const fromThrown = (error) => {

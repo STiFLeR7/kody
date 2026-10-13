@@ -63,6 +63,7 @@ import {
 	type EntitlementLimitErrorDetails,
 } from '#worker/entitlements/errors.ts'
 import { buildIntegrationReconnectHref } from '#universal/connection-trouble.ts'
+import { buildCredentialCreateHref } from '#universal/credential-contracts.ts'
 import { isIntegrationTokenRefreshCallerMessage } from '#worker/integrations/token-refresh.ts'
 import {
 	type KodyMcpServerMetadata,
@@ -1682,7 +1683,7 @@ export function getExecutionErrorDetails(
 		return {
 			kind: 'secret_required',
 			message,
-			nextStep: `Send the user to /connect/secret-set?name=${encodeURIComponent(missingSecretDetails.secretName)} so they can provide and save this secret, then retry the workflow.`,
+			nextStep: `Send the user to ${buildCredentialCreateHref({ kind: 'secret', kindMode: 'required', name: missingSecretDetails.secretName })} so they can provide and save this secret, then retry the workflow.`,
 			secretNames: [missingSecretDetails.secretName],
 			suggestedAction: {
 				type: 'connect_secret',
