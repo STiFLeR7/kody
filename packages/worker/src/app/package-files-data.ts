@@ -787,7 +787,8 @@ export async function loadPackagePageHasAgentsDocs(input: {
 
 /**
  * README `<img>` opt-in. Listing README is the pin `/assets/` serves.
- * Owner fallback README is the published snapshot (`loadOwnerPackageReadme`).
+ * Owner fallback README is the published snapshot (`loadOwnerPackageReadme`),
+ * or Artifacts HEAD for plain repos that have no publish KV snapshot.
  * Opt in only when that viewed README commit equals the blob `/assets/`
  * serves: listing pin when listed, otherwise published.
  */
@@ -817,6 +818,18 @@ export function resolvePackagePageReadmeImageBaseHref(input: {
 	})
 }
 
+function readmeFromFiles(files: Record<string, string>): string | null {
+	const path = findDirectoryReadmePath(files, '')
+	if (!path) return null
+	const content = files[path]?.trim()
+	return content ? content : null
+}
+
+/**
+ * Owner detail README. Prefer the published package snapshot; when that is
+ * missing (plain repos have none), read the same Artifacts HEAD tree the
+ * Files tab uses so detail and Files stay in parity.
+ */
 export async function loadOwnerPackageReadme(input: {
 	env: Env
 	request: Request
@@ -833,10 +846,51 @@ export async function loadOwnerPackageReadme(input: {
 			userId: input.userId,
 			sourceId: input.sourceId,
 		})
-		const path = findDirectoryReadmePath(loaded.files, '')
-		if (!path) return null
-		const content = loaded.files[path]?.trim()
-		return content ? content : null
+		const fromPublished = readmeFromFiles(loaded.files)
+		if (fromPublished) return fromPublished
+	} catch {
+		// Published snapshot missing — fall through to Artifacts HEAD.
+	}
+	return loadOwnerPackageReadmeFromArtifactsHead(input)
+}
+
+async function loadOwnerPackageReadmeFromArtifactsHead(input: {
+	env: Env
+	request: Request
+	userId: string
+	sourceId: string
+}): Promise<string | null> {
+	try {
+		const source = await getEntitySourceById(input.env.APP_DB, input.sourceId)
+		if (!source?.repo_id || source.user_id !== input.userId) return null
+		const liveCommit = source.indexed_commit ?? source.published_commit ?? ''
+		const resolved = await resolvePublicTreeCommit({
+			env: input.env,
+			request: input.request,
+			sourceRepoId: source.repo_id,
+			publishedCommit: source.published_commit ?? liveCommit,
+			pinnedCommit: liveCommit,
+			ref: '',
+		})
+		if (!resolved.commit) return null
+		const loaded = await loadPublicTreeFiles({
+			env: input.env,
+			request: input.request,
+			sourceId: source.id,
+			sourceRepoId: source.repo_id,
+			commit: resolved.commit,
+			pinnedCommit: liveCommit,
+		})
+		let files = loaded.files
+		if (Object.keys(files).length === 0) {
+			const tree = await readArtifactTreeAtCommit({
+				env: input.env,
+				repoId: source.repo_id,
+				commit: resolved.commit,
+			})
+			if (tree) files = tree
+		}
+		return readmeFromFiles(files)
 	} catch {
 		return null
 	}

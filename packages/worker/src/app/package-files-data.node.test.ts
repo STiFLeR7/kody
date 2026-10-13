@@ -19,6 +19,7 @@ import {
 } from '#worker/community/types.ts'
 import type * as publishedRuntimeArtifacts from '#worker/package-runtime/published-runtime-artifacts.ts'
 import { type PublishedSourceSnapshot } from '#worker/package-runtime/published-runtime-artifacts.ts'
+import type * as packageSource from '#worker/package-registry/source.ts'
 import type * as artifactFile from '#worker/repo/artifact-file.ts'
 import type * as artifactHeadCache from '#worker/repo/artifact-head-cache.ts'
 import type * as artifactSourceSnapshot from '#worker/repo/artifact-source-snapshot.ts'
@@ -44,6 +45,8 @@ const mockModule = vi.hoisted(() => ({
 	readAuthenticatedAppUser:
 		vi.fn<typeof authenticatedUser.readAuthenticatedAppUser>(),
 	loadPackagePage: vi.fn<typeof packagePage.loadPackagePage>(),
+	loadPackageSourceBySourceId:
+		vi.fn<typeof packageSource.loadPackageSourceBySourceId>(),
 	highlightMarkdownFences: vi.fn<typeof highlightCode.highlightMarkdownFences>(
 		async () => [],
 	),
@@ -120,6 +123,12 @@ vi.mock('#app/package-page.ts', () => ({
 		mockModule.loadPackagePage(...args),
 }))
 
+vi.mock('#worker/package-registry/source.ts', () => ({
+	loadPackageSourceBySourceId: (
+		...args: Parameters<typeof packageSource.loadPackageSourceBySourceId>
+	) => mockModule.loadPackageSourceBySourceId(...args),
+}))
+
 vi.mock('#app/highlight-code.ts', () => ({
 	highlightMarkdownFences: (
 		...args: Parameters<typeof highlightCode.highlightMarkdownFences>
@@ -143,6 +152,7 @@ const {
 	loadAccessiblePackageFilesData,
 	loadCommunityPackageFileRaw,
 	loadCommunityPackageFilesData,
+	loadOwnerPackageReadme,
 	loadPackagePageHasAgentsDocs,
 	loadPlainRepoFilesData,
 	resolvePackagePageReadmeImageBaseHref,
@@ -668,6 +678,49 @@ test('plain repo files fall back to Artifacts HEAD tree when publish snapshots a
 			commit: 'headlive1',
 		}),
 	)
+})
+
+test('loadOwnerPackageReadme falls back to Artifacts HEAD for plain repos without a publish snapshot', async () => {
+	publishPlainRepo()
+	mockModule.loadPackageSourceBySourceId.mockRejectedValue(
+		new Error('Saved package source has no published snapshot.'),
+	)
+	mockModule.readPublishedSourceSnapshot.mockResolvedValue(null)
+	mockModule.readArtifactSourceSnapshot.mockResolvedValue(null)
+	mockModule.readArtifactTreeAtCommit.mockResolvedValue({
+		'README.md': '# Live README from HEAD\n',
+		'notes.txt': 'side file\n',
+	})
+	const readme = await loadOwnerPackageReadme({
+		env,
+		request: new Request('https://example.com/@kentcdodds/notes'),
+		userId: ownerIdFromStored('owner-1'),
+		sourceId: 'src-plain-1',
+	})
+	expect(readme).toBe('# Live README from HEAD')
+	expect(mockModule.readArtifactTreeAtCommit).toHaveBeenCalledWith(
+		expect.objectContaining({
+			repoId: 'artifacts-repo-1',
+			commit: 'headlive1',
+		}),
+	)
+})
+
+test('loadOwnerPackageReadme prefers the published snapshot when present', async () => {
+	mockModule.loadPackageSourceBySourceId.mockResolvedValue({
+		source: entitySource,
+		manifest: { name: 'sentry', version: '1.0.0' },
+		files: { 'README.md': '# Published README\n' },
+		snapshotCreatedAt: '2026-01-01T00:00:00.000Z',
+	} as never)
+	const readme = await loadOwnerPackageReadme({
+		env,
+		request: new Request('https://example.com/@kentcdodds/sentry'),
+		userId: ownerIdFromStored('owner-1'),
+		sourceId: 'src-1',
+	})
+	expect(readme).toBe('# Published README')
+	expect(mockModule.readArtifactTreeAtCommit).not.toHaveBeenCalled()
 })
 
 test('plain repo raw serves media for guests who passed loadPackagePage', async () => {

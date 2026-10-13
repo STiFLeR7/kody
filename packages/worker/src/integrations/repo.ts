@@ -170,7 +170,15 @@ export async function listJoinedIntegrationsForUser(input: {
 		)
 		.bind(input.userId)
 		.all<JoinedIntegrationRow>()
-	return (result.results ?? []).map(mapJoinedRow)
+	// Skip orphan OAuth/platform joins so one soft-deleted app cannot fail
+	// the whole list (search, account UI, waiting probe). Single-get still
+	// throws via mapJoinedRow so callers learn the connection is broken.
+	const joined: Array<JoinedIntegration> = []
+	for (const row of result.results ?? []) {
+		if (isOrphanJoinedRow(row)) continue
+		joined.push(mapJoinedRow(row))
+	}
+	return joined
 }
 
 export async function getJoinedIntegrationByName(input: {
@@ -905,6 +913,17 @@ function mapLastAuthFailure(
 				: Number(row.auth_failed_http_status),
 		reconnectable: row.auth_failed_reconnectable === 1,
 	}
+}
+
+/**
+ * True when the connection row cannot join a live OAuth (user or platform) app.
+ * List callers skip these; single-get still throws in {@link mapJoinedRow}.
+ */
+function isOrphanJoinedRow(row: JoinedIntegrationRow): boolean {
+	if (row.platform_app_slug != null) {
+		return row.p_slug == null
+	}
+	return row.app_slug == null || row.a_slug == null
 }
 
 function mapJoinedRow(row: JoinedIntegrationRow): JoinedIntegration {
