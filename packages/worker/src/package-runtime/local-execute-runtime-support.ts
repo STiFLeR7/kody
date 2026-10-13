@@ -230,6 +230,62 @@ export function __kodyCreatePackageBoundCredentialRuntime(packageId) {
 const __kodyNullBodyStatuses = new Set([204, 205, 304]);
 const __kodyNativeFetch = globalThis.fetch.bind(globalThis);
 
+// Blob bodies become ordinary byte streams once inside a Request, so the
+// clone probe cannot tell them from string/bytes. Remember the Blob at
+// construction so fetch(request) can scan blob.stream() and forward the
+// same Blob without a tee/arrayBuffer copy (kody#3152).
+const __kodyRequestBlobBodiesSymbol = Symbol.for(
+	"kody.localExecuteRequestBlobBodies",
+);
+const __kodyRequestBlobBodies =
+	globalThis[__kodyRequestBlobBodiesSymbol] ??
+	(globalThis[__kodyRequestBlobBodiesSymbol] = new WeakMap());
+const __kodyLocalExecuteRequestPatchedSymbol = Symbol.for(
+	"kody.localExecuteRequestPatched",
+);
+if (!globalThis[__kodyLocalExecuteRequestPatchedSymbol]) {
+	const __kodyOriginalRequest = globalThis.Request;
+	globalThis.Request = class extends __kodyOriginalRequest {
+		constructor(input, init) {
+			super(input, init);
+			if (
+				typeof Blob !== "undefined" &&
+				init?.body != null &&
+				init.body instanceof Blob
+			) {
+				__kodyRequestBlobBodies.set(this, init.body);
+			} else if (
+				input instanceof __kodyOriginalRequest &&
+				__kodyRequestBlobBodies.has(input) &&
+				(init == null || init.body == null)
+			) {
+				__kodyRequestBlobBodies.set(
+					this,
+					__kodyRequestBlobBodies.get(input),
+				);
+			}
+		}
+		clone() {
+			const cloned = super.clone();
+			const blob = __kodyRequestBlobBodies.get(this);
+			if (blob) __kodyRequestBlobBodies.set(cloned, blob);
+			return cloned;
+		}
+	};
+	globalThis[__kodyLocalExecuteRequestPatchedSymbol] = true;
+}
+
+function __kodyTrackedRequestBlob(input, init) {
+	if (typeof Blob === "undefined") return null;
+	if (init?.body != null) {
+		return init.body instanceof Blob ? init.body : null;
+	}
+	if (input instanceof Request) {
+		return __kodyRequestBlobBodies.get(input) ?? null;
+	}
+	return null;
+}
+
 function __kodyBytesToBase64(bytes) {
 	let binary = "";
 	for (let i = 0; i < bytes.length; i += 1) {
@@ -587,9 +643,9 @@ function __kodyIsCallerByteStream(body) {
 	);
 }
 
-// String, Blob, and bytes bodies inside a Request are byte streams. A caller
+// String and bytes bodies inside a Request are byte streams. A caller
 // ReadableStream is not, so BYOB acquisition fails. Probe before any read so
-// the body stays usable.
+// the body stays usable. Blob-backed Requests are tracked separately.
 function __kodyIsNonByteStream(body) {
 	if (!body || typeof body.getReader !== "function") return false;
 	let reader;
@@ -727,47 +783,119 @@ async function __kodyGatewayFetchCall(input, init, packageId) {
 			(init == null || init.body == null) &&
 			inputRequest != null &&
 			__kodyIsNonByteStream(inputRequest.body);
-		let merged = new Request(input, init);
-		if (merged.headers.has(__kodySecretResolutionHeader)) {
-			merged = new Request(merged, {
-				headers: __kodyWithoutSecretResolutionHeader(merged.headers),
-			});
-			// The caller's Request still carries the header, so only the
-			// stripped copy may be forwarded.
-			reuseOriginal = false;
-		}
-		url = merged.url;
-		method = merged.method;
-		headers = Object.fromEntries(merged.headers.entries());
-		if (method !== "GET" && method !== "HEAD" && merged.body) {
-			if (__kodyIsCallerByteStream(init?.body) || requestStream) {
-				if (__kodyIsVerbatimBodyMode(resolutionMode)) {
+		const trackedBlob = __kodyTrackedRequestBlob(input, init);
+		// A remembered Blob is scanned via blob.stream() and forwarded as the
+		// same Blob — never clone().arrayBuffer() — so large uploads stay one
+		// copy. String/bytes Requests keep the clone probe below (kody#3152).
+		if (
+			trackedBlob != null &&
+			!requestStream &&
+			!__kodyIsCallerByteStream(init?.body)
+		) {
+			const headerSource =
+				init?.headers != null
+					? init.headers
+					: inputRequest != null
+						? inputRequest.headers
+						: undefined;
+			url = inputRequest != null ? inputRequest.url : String(input);
+			method = String(
+				init?.method ?? (inputRequest != null ? inputRequest.method : "GET"),
+			);
+			let headerList = new Headers(headerSource);
+			if (headerList.has(__kodySecretResolutionHeader)) {
+				headerList = __kodyWithoutSecretResolutionHeader(headerList);
+				reuseOriginal = false;
+			}
+			headers = Object.fromEntries(headerList.entries());
+			if (method !== "GET" && method !== "HEAD") {
+				if (
+					typeof trackedBlob.stream === "function" &&
+					!__kodyIsVerbatimBodyMode(resolutionMode) &&
+					(__kodyRequestHasSecretPlaceholders(url, headers) ||
+						(await __kodyBodyValueHoldsPlaceholder(trackedBlob)) ||
+						__kodyIsMultipartType(
+							headerList.get("content-type") ?? trackedBlob.type,
+						))
+				) {
+					const encoded = new Request(url, {
+						method,
+						headers,
+						body: trackedBlob,
+					});
+					method = encoded.method;
+					headers = Object.fromEntries(encoded.headers.entries());
+					streamingBody = trackedBlob.stream();
+					streamingBodyNeedsFill = true;
+					reuseOriginal = false;
+				} else if (!__kodyRequestHasSecretPlaceholders(url, headers)) {
+					if (reuseOriginal) {
+						return __kodyNativeFetch(input, init);
+					}
 					return __kodyNativeFetch(
-						merged,
-						__kodyNativeRequestOverlay({ input, init }),
+						url,
+						__kodyNativeStreamInit({
+							method,
+							headers,
+							body: trackedBlob,
+							input,
+							init,
+						}),
 					);
 				}
-				streamingBody = merged.body;
-				streamingBodyNeedsFill = true;
-				reuseOriginal = false;
+			} else if (reuseOriginal) {
+				return __kodyNativeFetch(input, init);
 			} else {
-				// String, bytes, and URLSearchParams become streams inside a
-				// Request. A clone is scanned chunk by chunk to decide the hop,
-				// and only a hop buffers the body. Otherwise the original Request
-				// is forwarded so cache, credentials, and redirect replay stay
-				// intact. Caller ReadableStream bodies are handled above.
-				if (
-					__kodyRequestHasSecretPlaceholders(url, headers) ||
-					(__kodyBodyIsFillSite(headers, resolutionMode) &&
-						(await __kodyStreamHoldsPlaceholder(merged.clone().body)))
-				) {
-					bodyBytes = new Uint8Array(await merged.clone().arrayBuffer());
-				}
-				reuseOriginal = false;
-				preservedRequest = merged;
+				preservedRequest = new Request(url, {
+					method,
+					headers,
+					...(__kodyNativeRequestOverlay({ input, init }) ?? {}),
+				});
 			}
 		} else {
-			preservedRequest = merged;
+			let merged = new Request(input, init);
+			if (merged.headers.has(__kodySecretResolutionHeader)) {
+				merged = new Request(merged, {
+					headers: __kodyWithoutSecretResolutionHeader(merged.headers),
+				});
+				// The caller's Request still carries the header, so only the
+				// stripped copy may be forwarded.
+				reuseOriginal = false;
+			}
+			url = merged.url;
+			method = merged.method;
+			headers = Object.fromEntries(merged.headers.entries());
+			if (method !== "GET" && method !== "HEAD" && merged.body) {
+				if (__kodyIsCallerByteStream(init?.body) || requestStream) {
+					if (__kodyIsVerbatimBodyMode(resolutionMode)) {
+						return __kodyNativeFetch(
+							merged,
+							__kodyNativeRequestOverlay({ input, init }),
+						);
+					}
+					streamingBody = merged.body;
+					streamingBodyNeedsFill = true;
+					reuseOriginal = false;
+				} else {
+					// String, bytes, and URLSearchParams become streams inside a
+					// Request. A clone is scanned chunk by chunk to decide the hop,
+					// and only a hop buffers the body. Otherwise the original Request
+					// is forwarded so cache, credentials, and redirect replay stay
+					// intact. Caller ReadableStream bodies are handled above.
+					// Blob-backed Requests are handled via __kodyTrackedRequestBlob.
+					if (
+						__kodyRequestHasSecretPlaceholders(url, headers) ||
+						(__kodyBodyIsFillSite(headers, resolutionMode) &&
+							(await __kodyStreamHoldsPlaceholder(merged.clone().body)))
+					) {
+						bodyBytes = new Uint8Array(await merged.clone().arrayBuffer());
+					}
+					reuseOriginal = false;
+					preservedRequest = merged;
+				}
+			} else {
+				preservedRequest = merged;
+			}
 		}
 	}
 	const hopHeaders =
