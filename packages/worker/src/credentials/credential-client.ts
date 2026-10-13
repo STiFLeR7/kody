@@ -28,6 +28,7 @@ import {
 import {
 	findCredentialById,
 	listUsableCredentials,
+	resolveNeedCandidates,
 	type UsableCredential,
 } from './credential-candidates.ts'
 import { loadPublishedCredentialNeeds } from './credential-needs-closure.ts'
@@ -239,7 +240,7 @@ function pickOne(input: {
 			'credential_unbound',
 			`No credential you can use matches ${input.describe}.${
 				input.possibleMatches.length > 0
-					? ' Some of the same kind have no provider; pick one by name, or set its provider with credentialUpdate so it resolves on its own.'
+					? ' Some matching credentials have no provider; pick one by name, or set its provider with credentialUpdate so it resolves on its own.'
 					: ''
 			}`,
 			{
@@ -293,25 +294,27 @@ export async function openCredentialClient(
 		})
 	} else {
 		const need = await loadNeed(ctx, key!)
-		const kind = need?.kind ?? null
-		const provider = need?.provider ?? key!
-		picked = pickOne({
-			key,
-			candidates: usable.filter(
-				(credential) =>
-					credential.provider === provider &&
-					(kind === null || credential.kind === kind),
-			),
-			possibleMatches: kind
-				? usable.filter(
-						(credential) =>
-							credential.kind === kind && credential.provider === null,
-					)
-				: [],
-			describe: kind
-				? `need "${key}" (${kind} from provider "${provider}")`
-				: `provider "${provider}"`,
-		})
+		if (need) {
+			const resolution = resolveNeedCandidates(need, usable)
+			picked = pickOne({
+				key,
+				candidates: resolution.candidates,
+				possibleMatches: resolution.possibleMatches,
+				describe: need.kind
+					? `need "${key}" (${need.kind} from provider "${need.provider}")`
+					: `need "${key}" (any fetch-capable credential from provider "${need.provider}")`,
+			})
+		} else {
+			const provider = key!
+			picked = pickOne({
+				key,
+				candidates: usable.filter(
+					(credential) => credential.provider === provider,
+				),
+				possibleMatches: [],
+				describe: `provider "${provider}"`,
+			})
+		}
 	}
 	if (picked.kind === 'mcp' && picked.scope === 'personal') {
 		throw refusal(
