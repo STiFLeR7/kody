@@ -184,8 +184,9 @@ GET /account/credentials.json?q=&kind=&scope=&packageScoped=&locked=
 ```
 
 Session-authenticated (website), for the current org binding. The MCP / Open API
-twin is the `credentialList` capability with the same filters as input and the
-same `credentials` array as output.
+twin is the `credentialList` capability (`GET /v1/credentials`, with `kinds` in
+place of `kind`) taking the same filters and returning the same `credentials`
+array.
 
 | Filter          | Values                                                                                |
 | --------------- | ------------------------------------------------------------------------------------- |
