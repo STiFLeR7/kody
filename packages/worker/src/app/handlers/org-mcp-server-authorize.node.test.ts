@@ -22,7 +22,9 @@ const mocks = vi.hoisted(() => ({
 			serverId: string
 		}) => Promise<McpServerPendingAuthorization | null>
 	>(async () => null),
-	bindOAuthAttemptActor: vi.fn(async () => ({ ok: true as const })),
+	bindOAuthAttemptActor: vi.fn(async (): Promise<{ ok: boolean }> => ({
+		ok: true,
+	})),
 }))
 
 vi.mock('#app/ssr-render.tsx', () => ({
