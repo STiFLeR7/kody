@@ -466,6 +466,44 @@ export type SnapshotDifference = {
  * Structural diff of two snapshots (or any JSON values), ignoring `takenAt`
  * and every `observed` section.
  */
+/**
+ * When every element is an object with a unique string identity field, key the
+ * array by that field so inserts do not shift later index diffs. Prefer
+ * `role` (people / D1 databases), then `table` (D1 table counts), then `id`.
+ */
+function keyedArrayView(
+	items: ReadonlyArray<unknown>,
+): { keyed: Record<string, unknown>; pathStyle: 'dot' } | null {
+	const identityKeys = ['role', 'table', 'id'] as const
+	for (const identityKey of identityKeys) {
+		if (
+			!items.every(
+				(item) =>
+					item !== null &&
+					typeof item === 'object' &&
+					!Array.isArray(item) &&
+					identityKey in item,
+			)
+		) {
+			continue
+		}
+		const keyed: Record<string, unknown> = {}
+		const seen = new Set<string>()
+		let unique = true
+		for (const item of items) {
+			const value = String((item as Record<string, unknown>)[identityKey] ?? '')
+			if (seen.has(value)) {
+				unique = false
+				break
+			}
+			seen.add(value)
+			keyed[value] = item
+		}
+		if (unique) return { keyed, pathStyle: 'dot' }
+	}
+	return null
+}
+
 export function diffSnapshots(
 	before: unknown,
 	after: unknown,
@@ -479,6 +517,25 @@ export function diffSnapshots(
 		typeof after === 'object' &&
 		Array.isArray(before) === Array.isArray(after)
 	) {
+		if (Array.isArray(before) && Array.isArray(after)) {
+			const beforeKeyed = keyedArrayView(before)
+			const afterKeyed = keyedArrayView(after)
+			if (beforeKeyed && afterKeyed) {
+				const keys = new Set([
+					...Object.keys(beforeKeyed.keyed),
+					...Object.keys(afterKeyed.keyed),
+				])
+				return [...keys]
+					.sort()
+					.flatMap((key) =>
+						diffSnapshots(
+							beforeKeyed.keyed[key],
+							afterKeyed.keyed[key],
+							`${path}.${key}`,
+						),
+					)
+			}
+		}
 		const keys = new Set([...Object.keys(before), ...Object.keys(after)])
 		return [...keys]
 			.sort()

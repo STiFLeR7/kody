@@ -108,6 +108,7 @@ const usageLines = [
 	'  --cookie-file <p>    Session file: cookie + MCP OAuth (origin + --email + --org)',
 	"  --email <addr>       Session identity; does not reuse another user's cookie",
 	'  --dump               Write the raw response body to .tmp/control-kody-body',
+	'  --headers            request: print response headers and TTFB ms',
 	'  --contains <text>    Fail unless the response body includes this text',
 	'  --path <path>        browse target path (default: /account)',
 	'  --record             browse: record Playwright video under .tmp/control-kody-browse',
@@ -190,6 +191,7 @@ export type ControlKodyOptions = {
 	body: string | null
 	dump: boolean
 	dumpFile: string
+	showHeaders: boolean
 	contains: Array<string>
 	previewArgv: Array<string>
 	path: string
@@ -256,6 +258,7 @@ export function parseControlArgs(argv: Array<string>): ControlKodyOptions {
 		body: null,
 		dump: false,
 		dumpFile: defaultDumpFile(),
+		showHeaders: false,
 		contains: [],
 		previewArgv: [],
 		path: defaultBrowsePath,
@@ -390,6 +393,10 @@ function parseSharedFlags(
 			}
 			case '--dump': {
 				options.dump = true
+				break
+			}
+			case '--headers': {
+				options.showHeaders = true
 				break
 			}
 			case '--contains': {
@@ -818,6 +825,8 @@ export type RequestResult = {
 	body: unknown
 	rawBody: string
 	detail: string
+	headers: Record<string, string>
+	ttfbMs: number
 }
 
 export async function requestAsSession(input: {
@@ -833,10 +842,16 @@ export async function requestAsSession(input: {
 	}
 	applySessionRequestHeaders(input.spec, headers)
 	if (input.cookieHeader) headers.Cookie = input.cookieHeader
+	const startedAt = performance.now()
 	const response = await fetchImpl(`${input.origin}${input.spec.path}`, {
 		method: input.spec.method,
 		headers,
 		body: await applySessionRequestBody(input.spec, headers),
+	})
+	const ttfbMs = Math.round(performance.now() - startedAt)
+	const responseHeaders: Record<string, string> = {}
+	response.headers.forEach((value, name) => {
+		responseHeaders[name] = value
 	})
 	const rawBody = await response.text()
 	let body: unknown = rawBody
@@ -853,6 +868,8 @@ export async function requestAsSession(input: {
 		path: input.spec.path,
 		body,
 		rawBody,
+		headers: responseHeaders,
+		ttfbMs,
 		detail: ok
 			? `HTTP ${response.status}`
 			: `expected ${expected ?? '2xx'}, got HTTP ${response.status}`,
@@ -1368,6 +1385,12 @@ async function runCommand(options: ControlKodyOptions) {
 			if (options.json) printJson(output)
 			else {
 				console.log(`${output.detail} ${output.path}`)
+				if (options.showHeaders) {
+					console.log(`ttfb_ms ${String(result.ttfbMs)}`)
+					for (const name of Object.keys(result.headers).sort()) {
+						console.log(`${name}: ${result.headers[name]}`)
+					}
+				}
 				if (options.dump || typeof result.body === 'string') {
 					console.log(rawBody)
 				} else console.log(JSON.stringify(result.body, null, 2))
