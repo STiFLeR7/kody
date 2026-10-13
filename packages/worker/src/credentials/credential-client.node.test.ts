@@ -36,6 +36,7 @@ import {
 } from './credential-call-map.ts'
 import {
 	applyCredentialClient,
+	loadRunCredentialNeeds,
 	openCredentialClient,
 	openCredentialClients,
 	validateCredentialCallMap,
@@ -798,4 +799,48 @@ test('call map validation keeps the entry package pinned needs over a dependency
 			strict: true,
 		}),
 	).resolves.toEqual({ warnings: [] })
+})
+
+test('a dependency opens against the entry package pinned need its picks passed, not its later publish', async () => {
+	const t = await setup()
+	await t.storeKey({ name: 'resend-prod' })
+	const request = t.requestAs('bea', 'owner')
+	const entryId = await t.savePackage({
+		ownerId: t.acmeId,
+		name: '@acme/entry',
+	})
+	const depId = await t.savePackage({ ownerId: t.acmeId, name: '@acme/mailer' })
+	const need = (provider: string): CredentialNeed => ({
+		key: 'MAIL',
+		kind: 'secret',
+		provider,
+		description: '',
+		multiple: false,
+	})
+	vi.spyOn(needsClosure, 'loadPublishedCredentialNeeds').mockImplementation(
+		async ({ sourceId }) => [
+			need(sourceId === `source-${entryId}` ? 'resend' : 'postmark'),
+		],
+	)
+	const runNeeds = loadRunCredentialNeeds({
+		env: t.env,
+		request,
+		packageIds: [entryId, depId],
+	})
+	const depContext = t.contextFor({
+		request,
+		packageId: depId,
+		credentials: { MAIL: 'resend-prod' },
+	})
+	await expect(
+		openCredentialClient(
+			{ ...depContext, runNeeds: () => runNeeds },
+			{
+				key: 'MAIL',
+			},
+		),
+	).resolves.toMatchObject({ key: 'MAIL', name: 'resend-prod' })
+	await expect(
+		rejection(openCredentialClient(depContext, { key: 'MAIL' })),
+	).resolves.toMatchObject({ body: { code: 'invalid_request' } })
 })

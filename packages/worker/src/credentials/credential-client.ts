@@ -134,6 +134,11 @@ export type CredentialClientContext = {
 	packageId: string | null
 	/** The caller's picks for this run, by need key. */
 	callMap?: CredentialCallMap | null
+	/**
+	 * The run's needs as `validateCredentialCallMap` sees them (entry closure
+	 * first), so a package's open resolves the same target its picks passed.
+	 */
+	runNeeds?: () => Promise<ReadonlyMap<string, CredentialNeed>>
 	waitUntil?: (promise: Promise<unknown>) => void
 }
 
@@ -223,6 +228,8 @@ async function loadPackageNeeds(input: {
 
 async function loadNeed(ctx: CredentialClientContext, key: string) {
 	if (!ctx.packageId) return null
+	const pinned = (await ctx.runNeeds?.())?.get(key)
+	if (pinned) return pinned
 	const needs = await loadPackageNeeds({
 		env: ctx.env,
 		request: requireActorRequest(ctx),
@@ -479,6 +486,28 @@ export async function openCredentialClients(
 }
 
 /**
+ * Every need the run's packages declare, by key. The entry package comes
+ * first: its closure pins its dependencies' needs, so a dependency's later
+ * publish never replaces them.
+ */
+export async function loadRunCredentialNeeds(input: {
+	env: Env
+	request: RequestContext
+	packageIds: ReadonlyArray<string>
+}): Promise<ReadonlyMap<string, CredentialNeed>> {
+	const needLists = await Promise.all(
+		input.packageIds.map((packageId) =>
+			loadPackageNeeds({ env: input.env, request: input.request, packageId }),
+		),
+	)
+	const needs = new Map<string, CredentialNeed>()
+	for (const need of needLists.flat()) {
+		if (!needs.has(need.key)) needs.set(need.key, need)
+	}
+	return needs
+}
+
+/**
  * Validates a call map before code runs (resolution rule 4). Every pick must
  * resolve. A key no package in the run declares is an error when `strict`
  * (an invoke) and a warning otherwise (ad hoc code reads it as a provider).
@@ -498,18 +527,14 @@ export async function validateCredentialCallMap(input: {
 				'A credentials map needs a person. This run has no acting person.',
 			)
 		}
-		const [usable, ...needLists] = await Promise.all([
+		const [usable, needs] = await Promise.all([
 			listUsableCredentials({ env: input.env, request }),
-			...input.packageIds.map((packageId) =>
-				loadPackageNeeds({ env: input.env, request, packageId }),
-			),
+			loadRunCredentialNeeds({
+				env: input.env,
+				request,
+				packageIds: input.packageIds,
+			}),
 		])
-		const needs = new Map<string, CredentialNeed>()
-		// The entry package comes first: its closure pins its dependencies'
-		// needs, so a dependency's later publish never replaces them.
-		for (const need of needLists.flat()) {
-			if (!needs.has(need.key)) needs.set(need.key, need)
-		}
 		const warnings: Array<string> = []
 		for (const [key, picks] of input.map) {
 			const need = needs.get(key) ?? null

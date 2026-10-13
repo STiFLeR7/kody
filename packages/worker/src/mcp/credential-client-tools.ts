@@ -49,6 +49,7 @@ export function createCredentialClientKodyTools(input: {
 			binding: input.options.binding,
 			packageId: await input.options.resolvePackageId(args.packageId),
 			callMap: input.options.callMap ?? null,
+			runNeeds: input.options.runNeeds,
 			waitUntil: input.options.waitUntil,
 		}) satisfies CredentialClientContext
 	return {

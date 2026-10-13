@@ -73,7 +73,11 @@ import {
 	type CredentialCallMap,
 	type RunCredentialCallMap,
 } from '#worker/credentials/credential-call-map.ts'
-import { validateCredentialCallMap } from '#worker/credentials/credential-client.ts'
+import {
+	loadRunCredentialNeeds,
+	validateCredentialCallMap,
+} from '#worker/credentials/credential-client.ts'
+import { type CredentialNeed } from '#worker/credentials/credential-needs.ts'
 import {
 	buildKodyModuleBundle,
 	hydrateKodyRuntimeModules,
@@ -1238,24 +1242,26 @@ export async function runBundledModuleWithRegistry(
 		const closedWorldRetrieverRuntime =
 			options?.closedWorldRetrieverRuntime === true
 		const callMap = options?.credentialCallMap ?? null
+		const runPackageIds = [
+			...new Set([
+				...(options?.packageContext?.packageId
+					? [options.packageContext.packageId]
+					: []),
+				...grantedPackageStorageIds,
+			]),
+		]
 		if (callMap && !callMap.checked) {
 			const { warnings } = await validateCredentialCallMap({
 				env,
 				request: callerContext.request ?? null,
 				map: callMap.map,
-				packageIds: [
-					...new Set([
-						...(options?.packageContext?.packageId
-							? [options.packageContext.packageId]
-							: []),
-						...grantedPackageStorageIds,
-					]),
-				],
+				packageIds: runPackageIds,
 				strict: callMap.strict,
 			})
 			if (warnings.length > 0) callMap.onWarnings?.(warnings)
 		}
 		const credentialClientBinding = newRunCredentialClientBinding()
+		let runNeeds: Promise<ReadonlyMap<string, CredentialNeed>> | null = null
 		const credentialClientTools: CredentialClientToolOptions | undefined =
 			callerContext.user?.userId && !closedWorldRetrieverRuntime
 				? {
@@ -1268,6 +1274,16 @@ export async function runBundledModuleWithRegistry(
 								? requested
 								: (options?.packageContext?.packageId ?? null),
 						callMap: callMap?.map ?? null,
+						runNeeds: () => {
+							const request = callerContext.request
+							if (!request) return Promise.resolve(new Map())
+							runNeeds ??= loadRunCredentialNeeds({
+								env,
+								request,
+								packageIds: runPackageIds,
+							})
+							return runNeeds
+						},
 						waitUntil: options?.waitUntil,
 					}
 				: undefined
