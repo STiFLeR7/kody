@@ -2,6 +2,8 @@ import { expect, test } from 'vitest'
 import {
 	collectPreviewBranchWorkerNames,
 	collectPreviewPullRequestNumbers,
+	hasBudgetForAnotherCleanup,
+	isPreviewDeployInProgress,
 	listPreviewCandidateNames,
 	planBranchPreviewSweep,
 	planPreviewSweep,
@@ -141,7 +143,7 @@ function jsonResponse(body: unknown, status = 200) {
 	})
 }
 
-test('listPreviewCandidateNames reads scripts, namespace owners, and paged D1 names', async () => {
+test('listPreviewCandidateNames reads scripts, namespace owners, paged D1/KV names, and cursor-paged R2 buckets', async () => {
 	const requested: Array<string> = []
 	const fetcher = (async (input: RequestInfo | URL) => {
 		const url = new URL(String(input))
@@ -184,22 +186,149 @@ test('listPreviewCandidateNames reads scripts, namespace owners, and paged D1 na
 						: [{ name: 'kody-pr-10-audit-db' }],
 			})
 		}
+		if (url.pathname.endsWith('/storage/kv/namespaces')) {
+			return jsonResponse({
+				success: true,
+				result: [{ title: 'kody-pr-12-oauth-kv' }],
+				result_info: { total_pages: 1 },
+			})
+		}
+		if (url.pathname.endsWith('/r2/buckets')) {
+			return url.searchParams.get('cursor') === 'page-2'
+				? jsonResponse({
+						success: true,
+						result: { buckets: [{ name: 'kody-pr-14-email-blobs' }] },
+					})
+				: jsonResponse({
+						success: true,
+						result: { buckets: [{ name: 'kody-pr-13-community-assets' }] },
+						result_info: { cursor: 'page-2' },
+					})
+		}
 		return jsonResponse({ success: false, errors: [{ message: 'nope' }] }, 404)
 	}) as typeof fetch
 
-	const names = await listPreviewCandidateNames({
+	const { names, scriptNames } = await listPreviewCandidateNames({
 		accountId: 'acct',
 		apiToken: 'token',
 		fetcher,
 	})
-	expect(collectPreviewPullRequestNumbers(names)).toEqual([7, 8, 9, 10, 11])
+	expect(collectPreviewPullRequestNumbers(names)).toEqual([
+		7, 8, 9, 10, 11, 12, 13, 14,
+	])
+	// The Worker scripts listing is the only source of liveness (review
+	// follow-up on #3563): it must never pick up D1/KV/R2/DO names.
+	expect(scriptNames).toEqual(['kody-pr-7', 'kody'])
 	expect(requested).toEqual([
 		'/client/v4/accounts/acct/workers/scripts',
 		'/client/v4/accounts/acct/workers/durable_objects/namespaces?page=1&per_page=100',
 		'/client/v4/accounts/acct/workers/durable_objects/namespaces?page=2&per_page=100',
 		'/client/v4/accounts/acct/d1/database?page=1&per_page=100',
 		'/client/v4/accounts/acct/d1/database?page=2&per_page=100',
+		'/client/v4/accounts/acct/storage/kv/namespaces?page=1&per_page=100',
+		'/client/v4/accounts/acct/r2/buckets?per_page=1000',
+		'/client/v4/accounts/acct/r2/buckets?per_page=1000&cursor=page-2',
 	])
+})
+
+test('a D1 name from one live branch can never mask an unrelated orphaned branch of the same name', () => {
+	// Regression for the review follow-up on #3563. Two distinct branches:
+	// - "foo" is live: bare worker `kody-branch-foo`, own D1 `kody-branch-foo-db`.
+	// - "foo-db" is orphaned: its worker is already gone, but its own D1
+	//   leftover `kody-branch-foo-db-db` survives (base `kody-branch-foo-db`
+	//   after stripping the trailing "-db" suffix).
+	// Live "foo"'s D1 name and orphaned "foo-db"'s bare worker name are the
+	// exact same string: "kody-branch-foo-db". Discovery (`names`) contains
+	// both D1 names, so liveness must come only from the Worker scripts
+	// listing (`scriptNames`), never from `names`, or the live D1 string
+	// would wrongly mark the orphan as live.
+	const names = [
+		'kody-branch-foo',
+		'kody-branch-foo-db',
+		'kody-branch-foo-db-db',
+	]
+	const scriptNames = ['kody-branch-foo']
+	const branchWorkerNames = collectPreviewBranchWorkerNames(names)
+	expect(branchWorkerNames).toEqual(['kody-branch-foo', 'kody-branch-foo-db'])
+
+	// The bug: liveness from the combined discovery set hides the orphan.
+	expect(
+		planBranchPreviewSweep({
+			branchWorkerNames,
+			liveNames: new Set(names),
+			maxPerRun: 10,
+		}).sweep,
+	).toEqual([])
+
+	// The fix: liveness from Worker scripts only finds it.
+	expect(
+		planBranchPreviewSweep({
+			branchWorkerNames,
+			liveNames: new Set(scriptNames),
+			maxPerRun: 10,
+		}),
+	).toEqual({
+		sweep: ['kody-branch-foo-db'],
+		deferred: [],
+		live: ['kody-branch-foo'],
+	})
+})
+
+test('isPreviewDeployInProgress checks in_progress then queued preview.yml runs', async () => {
+	const requestedStatuses: Array<string> = []
+	const respond = (hasRun: boolean) =>
+		(async (input: RequestInfo | URL) => {
+			const url = new URL(String(input))
+			requestedStatuses.push(url.searchParams.get('status') ?? '')
+			return jsonResponse({ total_count: hasRun ? 1 : 0 })
+		}) as typeof fetch
+
+	await expect(
+		isPreviewDeployInProgress({
+			repository: 'kentcdodds/kody',
+			githubToken: 'token',
+			fetcher: respond(false),
+		}),
+	).resolves.toBe(false)
+	expect(requestedStatuses).toEqual(['in_progress', 'queued'])
+
+	requestedStatuses.length = 0
+	await expect(
+		isPreviewDeployInProgress({
+			repository: 'kentcdodds/kody',
+			githubToken: 'token',
+			fetcher: respond(true),
+		}),
+	).resolves.toBe(true)
+	// Short-circuits on the first status that already has a run; never checks
+	// "queued" once "in_progress" already answered true.
+	expect(requestedStatuses).toEqual(['in_progress'])
+
+	await expect(
+		isPreviewDeployInProgress({
+			repository: 'kentcdodds/kody',
+			githubToken: 'token',
+			fetcher: (async () => jsonResponse({}, 502)) as typeof fetch,
+		}),
+	).rejects.toThrow(/502/)
+})
+
+test('hasBudgetForAnotherCleanup requires room for a full cleanup before the deadline', () => {
+	const deadlineMs = 1_000_000
+	expect(
+		hasBudgetForAnotherCleanup({
+			now: () => 847_000,
+			deadlineMs,
+			cleanupBudgetMs: 150_000,
+		}),
+	).toBe(true)
+	expect(
+		hasBudgetForAnotherCleanup({
+			now: () => 851_000,
+			deadlineMs,
+			cleanupBudgetMs: 150_000,
+		}),
+	).toBe(false)
 })
 
 test('readPullRequestState maps GitHub responses and treats 404 as unknown', async () => {
